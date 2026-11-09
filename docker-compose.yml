@@ -15,9 +15,6 @@ services:
     image: ${DOCKER_USERNAME}/codecollab-frontend:${FRONTEND_TAG:-latest}
     container_name: codecollab-frontend
     restart: unless-stopped
-    environment:
-      - VITE_SOCKET_URL=/
-      - VITE_API_URL=/api
     networks:
       - app-network
 
