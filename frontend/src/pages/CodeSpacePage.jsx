@@ -38,7 +38,7 @@ function CodeSpacePage() {
     setIsLoading(true);
     setAuthError('');
     try {
-      const res = await fetch(`${API_URL}/api/codespaces/${spaceName}/data`, {
+      const res = await fetch(`${API_URL}/codespaces/${spaceName}/data`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ passcode }),
@@ -80,7 +80,7 @@ function CodeSpacePage() {
   useEffect(() => {
     // Stage 1: Check if the room is public or private
 
-    fetch(`${API_URL}/api/codespaces/${spaceName}/status`)
+    fetch(`${API_URL}/codespaces/${spaceName}/status`)
       .then(res => {
         if (!res.ok) throw new Error('Codespace not found.');
         return res.json();
@@ -144,7 +144,7 @@ function CodeSpacePage() {
   };
   const handleDelete = async (file) => {
     try {
-      const res = await fetch(`${API_URL}/api/codespaces/${spaceName}/delete`, {
+      const res = await fetch(`${API_URL}/codespaces/${spaceName}/delete`, {
         method: "DELETE",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ file }),
@@ -234,7 +234,7 @@ function CodeSpacePage() {
 
   const updatePrivacySettings = async (newIsPublic, passcode) => {
     try {
-      const res = await fetch(`${API_URL}/api/codespaces/${spaceName}/privacy`, {
+      const res = await fetch(`${API_URL}/codespaces/${spaceName}/privacy`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ isPublic: newIsPublic, passcode }),

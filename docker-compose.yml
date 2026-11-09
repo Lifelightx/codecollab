@@ -1,16 +1,29 @@
-version: "3.9"
 
 services:
+  proxy:
+    image: nginx:alpine
+    container_name: proxy
+    ports:
+      - "443:443"
+      - "80:80"
+    networks:
+      - app-network
+    volumes:
+      - "/home/ubuntu/nginx/nginx.conf:/etc/nginx/nginx.conf:ro"
+      - "/etc/letsencrypt:/etc/letsencrypt:ro" 
   frontend:
-    build: ./frontend
-    container_name: frontend
+    image: jeebanjyotimallik/frontend:latest
+    container_name: codecollab-frontend
     restart: unless-stopped
+    environment:
+      - VITE_SOCKET_URL=/
+      - VITE_API_URL=/api
     networks:
       - app-network
 
   backend:
-    build: ./backend
-    container_name: backend
+    image: jeebanjyotimallik/backend:latest
+    container_name: codecollab-backend
     restart: unless-stopped
     environment:
       MONGO_URI: mongodb://mongo:27017/appdb
