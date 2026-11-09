@@ -24,6 +24,15 @@ jobs:
       - name: Checkout Repository
         uses: actions/checkout@v4
 
+      - name: Normalize Docker Username
+        id: prep
+        run: |
+          CLEAN_USER=$(echo "${{ secrets.DOCKER_USERNAME }}" | tr '[:upper:]' '[:lower:]' | xargs)
+          echo "docker_user=$CLEAN_USER" >> "$GITHUB_OUTPUT"
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
       
@@ -39,8 +48,9 @@ jobs:
         with:
           context: ./backend
           file: ./backend/Dockerfile
+          platforms: linux/amd64,linux/arm64
           push: ${{ github.event_name == 'push' }}
-          tags: ${{ secrets.DOCKER_USERNAME }}/codecollab-backend:${{ github.sha }}
+          tags: ${{ steps.prep.outputs.docker_user }}/codecollab-backend:${{ github.sha }}
           cache-from: type=gha,scope=backend
           cache-to: type=gha,mode=max,scope=backend
       
@@ -49,8 +59,9 @@ jobs:
         with:
           context: ./frontend
           file: ./frontend/Dockerfile
+          platforms: linux/amd64,linux/arm64
           push: ${{ github.event_name == 'push' }}
-          tags: ${{ secrets.DOCKER_USERNAME }}/codecollab-frontend:${{ github.sha }}
+          tags: ${{ steps.prep.outputs.docker_user }}/codecollab-frontend:${{ github.sha }}
           cache-from: type=gha,scope=frontend
           cache-to: type=gha,mode=max,scope=frontend
 
@@ -59,8 +70,9 @@ jobs:
         with:
           context: ./nginx
           file: ./nginx/Dockerfile
+          platforms: linux/amd64,linux/arm64
           push: ${{ github.event_name == 'push' }}
-          tags: ${{ secrets.DOCKER_USERNAME }}/codecollab-nginx:${{ github.sha }}
+          tags: ${{ steps.prep.outputs.docker_user }}/codecollab-nginx:${{ github.sha }}
           cache-from: type=gha,scope=nginx
           cache-to: type=gha,mode=max,scope=nginx
 
@@ -86,6 +98,9 @@ jobs:
         run: |
           set -euo pipefail
 
+          # Normalize docker username to lowercase
+          CLEAN_USER=$(echo "$DOCKER_USERNAME" | tr '[:upper:]' '[:lower:]' | xargs)
+
           mkdir -p ~/.ssh
           chmod 700 ~/.ssh
 
@@ -93,7 +108,7 @@ jobs:
           chmod 600 ~/.ssh/deploy_key
 
           printf '%s\n' "$SERVER_KNOWN_HOSTS" > ~/.ssh/known_hosts
-          chmod 600 ~/.ssh/known_hosts
+          chmod 644 ~/.ssh/known_hosts
 
           # 1. Ensure target directory exists on remote host
           ssh -i ~/.ssh/deploy_key \
@@ -114,8 +129,8 @@ jobs:
             -o IdentitiesOnly=yes \
             "$SERVER_USER@$SERVER_HOST" \
             "cd $TARGET_DIR && \
-             IMAGE_TAG='$IMAGE_TAG' DOCKER_USERNAME='$DOCKER_USERNAME' docker compose config --quiet && \
-             IMAGE_TAG='$IMAGE_TAG' DOCKER_USERNAME='$DOCKER_USERNAME' docker compose pull && \
-             IMAGE_TAG='$IMAGE_TAG' DOCKER_USERNAME='$DOCKER_USERNAME' docker compose up -d --remove-orphans"
+             IMAGE_TAG='$IMAGE_TAG' DOCKER_USERNAME='$CLEAN_USER' docker compose config --quiet && \
+             IMAGE_TAG='$IMAGE_TAG' DOCKER_USERNAME='$CLEAN_USER' docker compose pull && \
+             IMAGE_TAG='$IMAGE_TAG' DOCKER_USERNAME='$CLEAN_USER' docker compose up -d --remove-orphans"
 
           rm -f ~/.ssh/deploy_key
