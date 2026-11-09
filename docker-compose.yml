@@ -12,7 +12,7 @@ services:
       - "/home/ubuntu/nginx/nginx.conf:/etc/nginx/nginx.conf:ro"
       - "/etc/letsencrypt:/etc/letsencrypt:ro" 
   frontend:
-    image: ${DOCKER_USERNAME}/codecollab-frontend:${IMAGE_TAG}
+    image: ${DOCKER_USERNAME}/codecollab-frontend:${FRONTEND_TAG:-latest}
     container_name: codecollab-frontend
     restart: unless-stopped
     environment:
@@ -22,7 +22,7 @@ services:
       - app-network
 
   backend:
-    image: ${DOCKER_USERNAME}/codecollab-backend:${IMAGE_TAG}
+    image: ${DOCKER_USERNAME}/codecollab-backend:${BACKEND_TAG:-latest}
     container_name: codecollab-backend
     restart: unless-stopped
     environment:
