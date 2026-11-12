@@ -1,8 +1,8 @@
 import { useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, Link } from 'react-router-dom';
 import axios from 'axios';
-import JoinPrivateModal from '../components/JoinPrivateModal'; // This component must exist
 import { useAppContext } from '../Context';
+import Navbar from '../components/Navbar';
 
 function HomePage() {
   const {API_URL, verified, setVerified} = useAppContext();
@@ -72,6 +72,8 @@ function HomePage() {
 
   return (
     <>
+      <Navbar/>
+
       {/* The modal is conditionally rendered based on state */}
       {/* {showPasscodeModal && (
         <JoinPrivateModal
@@ -135,10 +137,10 @@ function HomePage() {
 
           {/* Feature pills */}
           <div className="flex flex-wrap gap-3 mt-12 justify-center max-w-2xl">
-            <div className="px-4 py-2 bg-white/5 backdrop-blur-sm border border-white/10 rounded-full text-sm text-gray-300">🚀 Instant setup</div>
-            <div className="px-4 py-2 bg-white/5 backdrop-blur-sm border border-white/10 rounded-full text-sm text-gray-300">⚡ Real-time sync</div>
-            <div className="px-4 py-2 bg-white/5 backdrop-blur-sm border border-white/10 rounded-full text-sm text-gray-300">🔒 Secure spaces</div>
-            <div className="px-4 py-2 bg-white/5 backdrop-blur-sm border border-white/10 rounded-full text-sm text-gray-300">🌐 Share anywhere</div>
+            <div className="px-4 py-2 bg-white/5 backdrop-blur-sm border border-white/10 rounded-full text-sm text-gray-300">Instant setup</div>
+            <div className="px-4 py-2 bg-white/5 backdrop-blur-sm border border-white/10 rounded-full text-sm text-gray-300">Real-time sync</div>
+            <div className="px-4 py-2 bg-white/5 backdrop-blur-sm border border-white/10 rounded-full text-sm text-gray-300">Secure spaces</div>
+            <div className="px-4 py-2 bg-white/5 backdrop-blur-sm border border-white/10 rounded-full text-sm text-gray-300">Share anywhere</div>
           </div>
 
           {/* Bottom text */}

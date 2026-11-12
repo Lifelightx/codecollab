@@ -1,98 +1,113 @@
 const Codespace = require('../models/codeSpace');
-// NOTE: Running arbitrary code is a HUGE security risk.
-// This is a simplified example. In production, use Docker or a similar sandboxing technology.
-const { spawn } = require('child_process');
-const fs = require('fs');
-const path = require('path');
+const User = require('../models/User');
+
+const GUEST_MAX_BYTES = 2 * 1024 * 1024; // 2MB limit for guest spaces
+const USER_MAX_BYTES = 200 * 1024 * 1024; // 200MB limit for signed-in user
 
 const initializeSocket = (io) => {
     io.on('connection', (socket) => {
-        // console.log(`User connected: ${socket.id}`);
-
         socket.on('join-space', async ({ spaceName }) => {
-            socket.join(spaceName);
-            // console.log(`${socket.id} joined space: ${spaceName}`);
-            // Let others in the room know a new user has joined
-            socket.to(spaceName).emit('user-joined', { userId: socket.id });
+            const normalized = spaceName.toLowerCase();
+            socket.join(normalized);
+            socket.to(normalized).emit('user-joined', { userId: socket.id });
         });
 
         // Listen for code changes from a client
-        socket.on('code-change', ({ spaceName, file, content }) => {
-            // Broadcast the changes to all other clients in the same room (space)
-            socket.to(spaceName).emit('code-updated', { file, content });
+        socket.on('code-change', async ({ spaceName, file, content }) => {
+            const normalized = spaceName.toLowerCase();
+            socket.to(normalized).emit('code-updated', { file, content });
 
-            // Debounce this in a real app to avoid excessive DB writes
-            Codespace.updateOne(
-                { name: spaceName, 'files.name': file },
-                { $set: { 'files.$.content': content } }
-            ).catch(err => console.error("DB update failed:", err));
-        });
+            try {
+                const space = await Codespace.findOne({ name: normalized });
+                if (!space) return;
 
-        // Listen for new file creation
-        socket.on('create-file', async ({ spaceName, fileName, language }) => {
-            const newFile = { name: fileName, language, content: '' };
-            const updatedCodespace = await Codespace.findOneAndUpdate(
-                { name: spaceName },
-                { $push: { files: newFile } },
-                { new: true }
-            );
+                // Check 2MB size limit for unauthenticated spaces
+                if (!space.ownerId) {
+                    const currentSize = space.calculateTotalSize();
+                    const incomingSize = content ? Buffer.byteLength(content, 'utf8') : 0;
+                    if (currentSize + incomingSize > GUEST_MAX_BYTES) {
+                        socket.emit('space-limit-exceeded', {
+                            message: 'This guest codespace has reached the 2MB size limit. Sign in to unlock up to 200MB!',
+                        });
+                        return;
+                    }
+                }
 
-            if (updatedCodespace) {
-                // Notify all clients in the room about the new file
-                io.to(spaceName).emit('file-created', updatedCodespace.files);
+                await Codespace.updateOne(
+                    { name: normalized, 'files.name': file },
+                    { $set: { 'files.$.content': content } }
+                );
+            } catch (err) {
+                console.error("DB update failed:", err);
             }
         });
 
-        // Listen for file deletion
-        socket.on('delete-file', async ({ spaceName, fileName }) => {
-            const updatedCodespace = await Codespace.findOneAndUpdate(
-                { name: spaceName },
-                { $pull: { files: { name: fileName } } },
-                { new: true }
-            );
+        // Listen for new file creation
+        socket.on('create-file', async ({ spaceName, fileName, language, isFolder, path }) => {
+            const normalized = spaceName.toLowerCase();
+            try {
+                const space = await Codespace.findOne({ name: normalized });
+                if (!space) return;
 
-            if (updatedCodespace) {
-                // Notify all clients in the room about the file deletion
-                io.to(spaceName).emit('file-deleted', { fileName, files: updatedCodespace.files });
+                // Gate folders to signed-in owners only
+                if (isFolder && !space.ownerId) {
+                    socket.emit('auth-required', {
+                        message: 'Folder creation is only available for signed-in users. Please sign in.',
+                    });
+                    return;
+                }
+
+                // Check guest 2MB size limit
+                if (!space.ownerId && space.calculateTotalSize() >= GUEST_MAX_BYTES) {
+                    socket.emit('space-limit-exceeded', {
+                        message: 'Guest spaces cannot exceed 2MB. Sign in to continue.',
+                    });
+                    return;
+                }
+
+                const newFile = { 
+                    name: fileName, 
+                    language: language || 'plaintext', 
+                    content: '',
+                    isFolder: !!isFolder,
+                    path: path || '',
+                };
+
+                const updatedCodespace = await Codespace.findOneAndUpdate(
+                    { name: normalized },
+                    { $push: { files: newFile } },
+                    { new: true }
+                );
+
+                if (updatedCodespace) {
+                    io.to(normalized).emit('file-created', updatedCodespace.files);
+                }
+            } catch (err) {
+                console.error("Create file error:", err);
+            }
+        });
+
+        // Listen for file/folder deletion
+        socket.on('delete-file', async ({ spaceName, fileName }) => {
+            const normalized = spaceName.toLowerCase();
+            try {
+                const updatedCodespace = await Codespace.findOneAndUpdate(
+                    { name: normalized },
+                    { $pull: { files: { name: fileName } } },
+                    { new: true }
+                );
+
+                if (updatedCodespace) {
+                    io.to(normalized).emit('file-deleted', { fileName, files: updatedCodespace.files });
+                }
+            } catch (err) {
+                console.error("Delete file error:", err);
             }
         });
 
         socket.on('privacy-change', ({ spaceName, isPublic, hasPasscode }) => {
-            // Broadcast the change to everyone in the room
-            socket.to(spaceName).emit('privacy-updated', { isPublic, hasPasscode });
-        });
-
-        // Listen for a file being closed
-        socket.on('file-close', ({ spaceName, fileName }) => {
-            // Broadcast which file was closed
-            socket.to(spaceName).emit('file-closed', { fileName });
-        });
-
-        // Handle terminal commands (SIMPLIFIED & INSECURE EXAMPLE)
-        socket.on('terminal-command', ({ spaceName, command }) => {
-            // For a real app, you MUST sandbox this. Create a temp dir, write files, then exec.
-            const [cmd, ...args] = command.split(' ');
-
-            // Whitelist safe commands
-            if (!['node', 'python'].includes(cmd)) {
-                socket.emit('terminal-output', 'Error: Command not allowed.');
-                return;
-            }
-
-            const proc = spawn(cmd, args);
-            proc.stdout.on('data', (data) => {
-                socket.emit('terminal-output', data.toString());
-            });
-            proc.stderr.on('data', (data) => {
-                socket.emit('terminal-output', `ERROR: ${data.toString()}`);
-            });
-            proc.on('close', (code) => {
-                socket.emit('terminal-output', `Process exited with code ${code}`);
-            });
-        });
-
-        socket.on('disconnect', () => {
-            // console.log(`User disconnected: ${socket.id}`);
+            const normalized = spaceName.toLowerCase();
+            socket.to(normalized).emit('privacy-updated', { isPublic, hasPasscode });
         });
     });
 };

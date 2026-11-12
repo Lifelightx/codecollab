@@ -1,4 +1,5 @@
 import { FiX, FiLock, FiUnlock } from 'react-icons/fi';
+import { VscGlobe } from 'react-icons/vsc';
 import FileIcon from './FileIcon';
 
 function TabBar({ 
@@ -8,6 +9,7 @@ function TabBar({
     onTabClose, 
     isPublic, 
     onTogglePrivacy,
+    onOpenShare,
     themeConfig
 }) {
   const ui = themeConfig?.ui || {
@@ -65,6 +67,20 @@ function TabBar({
 
       {/* Action Controls on the right */}
       <div className="flex items-center space-x-2 px-3">
+        {/* Share Button (QR & Link) */}
+        <button
+          onClick={onOpenShare}
+          className="flex items-center space-x-1.5 px-2.5 py-1 rounded text-xs transition-colors hover:opacity-80 cursor-pointer"
+          style={{
+            backgroundColor: `${ui.activeBorder}22`,
+            color: ui.activeBorder,
+          }}
+          title="Share with QR Code or Link"
+        >
+          <VscGlobe className="w-3.5 h-3.5" />
+          <span className="text-[11px] font-medium hidden sm:inline">Share</span>
+        </button>
+
         {/* Privacy Lock Toggle */}
         <button
           onClick={onTogglePrivacy}

@@ -1,7 +1,7 @@
 import { useEffect, useState, useRef } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { io } from 'socket.io-client';
-import { VscFiles, VscSettingsGear, VscSourceControl, VscColorMode } from 'react-icons/vsc';
+import { VscFiles, VscSettingsGear, VscSourceControl, VscColorMode, VscAccount, VscCloudUpload } from 'react-icons/vsc';
 
 import FileExplorer from '../components/FileExplorer';
 import Editor, { THEME_OPTIONS, getThemeConfig } from '../components/Editor';
@@ -9,18 +9,34 @@ import TabBar from '../components/TabBar';
 import PasscodeModal from '../components/PasscodeModal';
 import JoinPrivateModal from '../components/JoinPrivateModal';
 import SettingsMenu from '../components/SettingsMenu';
+import AuthModal from '../components/AuthModal';
+import ShareModal from '../components/ShareModal';
+import GuestReminderBanner from '../components/GuestReminderBanner';
+import { UploadPanel, UploadPreview } from '../components/UploadPanel';
+import ProfilePopover from '../components/ProfilePopover';
 import { useAppContext } from '../Context';
 
 function CodeSpacePage() {
   const { spaceName } = useParams();
   const navigate = useNavigate();
   const socketRef = useRef(null);
-  const { API_URL, SOCKET_URL } = useAppContext();
+  const { 
+    API_URL, 
+    SOCKET_URL, 
+    user, 
+    authModalOpen, 
+    authModalMode, 
+    openAuthModal, 
+    closeAuthModal 
+  } = useAppContext();
 
   // --- Data State ---
   const [files, setFiles] = useState([]);
   const [openFiles, setOpenFiles] = useState([]);
   const [activeFile, setActiveFile] = useState(null);
+  const [isOwner, setIsOwner] = useState(false);
+  const [customSlug, setCustomSlug] = useState('');
+  const [expiresAt, setExpiresAt] = useState(null);
 
   // --- UI & Layout State ---
   const [isDataLoaded, setIsDataLoaded] = useState(false);
@@ -29,6 +45,7 @@ function CodeSpacePage() {
   const [authError, setAuthError] = useState('');
   const [isPublic, setIsPublic] = useState(true);
   const [isSetPrivacyModalOpen, setIsSetPrivacyModalOpen] = useState(false);
+  const [isShareModalOpen, setIsShareModalOpen] = useState(false);
   const [isSidebarOpen, setIsSidebarOpen] = useState(true);
   const [sidebarWidth, setSidebarWidth] = useState(() => {
     const saved = localStorage.getItem('codecollab-sidebar-width');
@@ -36,6 +53,12 @@ function CodeSpacePage() {
   });
   const [isResizing, setIsResizing] = useState(false);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
+  const [isProfileOpen, setIsProfileOpen] = useState(false);
+  
+  // Upload panel state
+  const [sidebarPanel, setSidebarPanel] = useState('explorer'); // 'explorer' | 'uploads'
+  const [uploadedFiles, setUploadedFiles] = useState([]);
+  const [selectedUpload, setSelectedUpload] = useState(null);
   
   // Theme state with localStorage persistence
   const [currentTheme, setCurrentTheme] = useState(() => {
@@ -54,7 +77,6 @@ function CodeSpacePage() {
   useEffect(() => {
     const handleMouseMove = (e) => {
       if (!isResizing) return;
-      // 48px is the fixed activity bar width
       const newWidth = e.clientX - 48;
       if (newWidth >= 160 && newWidth <= 600) {
         setSidebarWidth(newWidth);
@@ -108,6 +130,9 @@ function CodeSpacePage() {
       const data = await res.json();
       setFiles(data.files || []);
       setIsPublic(data.isPublic);
+      setIsOwner(!!data.ownerId);
+      setCustomSlug(data.customSlug || '');
+      setExpiresAt(data.expiresAt);
 
       if (data.files && data.files.length > 0) {
         setOpenFiles([data.files[0]]);
@@ -143,6 +168,9 @@ function CodeSpacePage() {
         return res.json();
       })
       .then((data) => {
+        setIsOwner(data.isOwner);
+        setCustomSlug(data.customSlug || '');
+        setExpiresAt(data.expiresAt);
         if (data.isPublic) {
           fetchCodeSpaceData(null);
         } else {
@@ -165,7 +193,7 @@ function CodeSpacePage() {
       if (Array.isArray(newFileList)) {
         setFiles(newFileList);
         const newlyCreated = newFileList[newFileList.length - 1];
-        if (newlyCreated) {
+        if (newlyCreated && !newlyCreated.isFolder) {
           setOpenFiles((prev) => {
             if (!prev.some((f) => f.name === newlyCreated.name)) {
               return [...prev, newlyCreated];
@@ -174,15 +202,6 @@ function CodeSpacePage() {
           });
           setActiveFile(newlyCreated);
         }
-      } else if (newFileList && newFileList.name) {
-        setFiles((prev) => [...prev, newFileList]);
-        setOpenFiles((prev) => {
-          if (!prev.some((f) => f.name === newFileList.name)) {
-            return [...prev, newFileList];
-          }
-          return prev;
-        });
-        setActiveFile(newFileList);
       }
     });
 
@@ -211,13 +230,24 @@ function CodeSpacePage() {
     socket.on('privacy-updated', (data) => {
       setIsPublic(data.isPublic);
     });
+
+    socket.on('space-limit-exceeded', ({ message }) => {
+      alert(`⚠️ Storage limit reached: ${message}`);
+    });
+
+    socket.on('auth-required', ({ message }) => {
+      alert(`🔒 ${message}`);
+      openAuthModal('register');
+    });
   };
 
   const handleFileSelect = (file) => {
+    if (file.isFolder) return;
     if (!openFiles.some((f) => f.name === file.name)) {
       setOpenFiles((prev) => [...prev, file]);
     }
     setActiveFile(file);
+    setSelectedUpload(null); // clear upload preview when a code file is selected
   };
 
   const handleTabClick = (file) => {
@@ -238,7 +268,6 @@ function CodeSpacePage() {
 
   const handleCreateFile = (fileName) => {
     let finalFileName = fileName.trim();
-    // Allow extensions or dot-less known filenames like 'Dockerfile'
     if (!finalFileName.includes('.') && finalFileName.toLowerCase() !== 'dockerfile') {
       finalFileName += '.txt';
     }
@@ -254,6 +283,24 @@ function CodeSpacePage() {
       spaceName,
       fileName: finalFileName,
       language,
+      isFolder: false,
+    });
+  };
+
+  const handleCreateFolder = (folderName) => {
+    if (!user) {
+      openAuthModal('register');
+      return;
+    }
+    const cleanName = folderName.trim();
+    if (files.some((f) => f.name.toLowerCase() === cleanName.toLowerCase())) {
+      alert('A file or folder with this name already exists.');
+      return;
+    }
+    socketRef.current?.emit('create-file', {
+      spaceName,
+      fileName: cleanName,
+      isFolder: true,
     });
   };
 
@@ -270,19 +317,6 @@ function CodeSpacePage() {
   const handleTogglePrivacy = () => {
     if (isPublic) setIsSetPrivacyModalOpen(true);
     else updatePrivacySettings(true, null);
-  };
-
-  const handleRunCode = () => {
-    if (activeFile?.language !== 'js') {
-      alert('Run is only available for JavaScript files.');
-      return;
-    }
-    try {
-      new Function(activeFile.content)();
-      alert('JavaScript code executed successfully! (Check developer console for output)');
-    } catch (e) {
-      alert(`Execution Error: ${e.message}`);
-    }
   };
 
   const updatePrivacySettings = async (newIsPublic, passcode) => {
@@ -338,7 +372,7 @@ function CodeSpacePage() {
         />
       )}
 
-      {/* VS Code Settings / QuickPick Modal */}
+      {/* Settings & Themes QuickPick */}
       <SettingsMenu
         isOpen={isSettingsOpen}
         onClose={() => setIsSettingsOpen(false)}
@@ -350,6 +384,24 @@ function CodeSpacePage() {
         themeConfig={themeConfig}
       />
 
+      {/* Auth Modal (Sign In / Sign Up) */}
+      <AuthModal
+        isOpen={authModalOpen}
+        onClose={closeAuthModal}
+        defaultMode={authModalMode}
+        themeConfig={themeConfig}
+      />
+
+      {/* Share & QR Modal */}
+      <ShareModal
+        isOpen={isShareModalOpen}
+        onClose={() => setIsShareModalOpen(false)}
+        spaceName={spaceName}
+        currentSlug={customSlug}
+        onSlugUpdated={(newSlug) => setCustomSlug(newSlug)}
+        themeConfig={themeConfig}
+      />
+
       <div 
         className="flex flex-col h-screen w-screen overflow-hidden font-sans transition-colors duration-150"
         style={{
@@ -357,6 +409,13 @@ function CodeSpacePage() {
           color: ui.sidebarFg,
         }}
       >
+        {/* 24h Guest Reminder Banner */}
+        <GuestReminderBanner
+          user={user}
+          onOpenAuth={(mode) => openAuthModal(mode)}
+          themeConfig={themeConfig}
+        />
+
         {/* Main Workspace Body */}
         <div className="flex flex-1 overflow-hidden">
           {/* Left Activity Bar (48px) */}
@@ -368,21 +427,56 @@ function CodeSpacePage() {
             }}
           >
             <div className="flex flex-col items-center space-y-3">
+              {/* Explorer icon */}
               <button
-                onClick={() => setIsSidebarOpen((prev) => !prev)}
+                onClick={() => {
+                  setSidebarPanel('explorer');
+                  setIsSidebarOpen(true);
+                }}
                 className="p-2.5 rounded transition-all cursor-pointer"
                 style={{
-                  color: isSidebarOpen ? ui.activityBarActiveBorder : ui.activityBarFg,
-                  borderLeft: isSidebarOpen ? `2px solid ${ui.activityBarActiveBorder}` : '2px solid transparent',
+                  color: isSidebarOpen && sidebarPanel === 'explorer' ? ui.activityBarActiveBorder : ui.activityBarFg,
+                  borderLeft: isSidebarOpen && sidebarPanel === 'explorer' ? `2px solid ${ui.activityBarActiveBorder}` : '2px solid transparent',
                 }}
-                title="Explorer (Toggle Sidebar)"
+                title="Explorer"
               >
                 <VscFiles className="w-5 h-5" />
               </button>
+
+              {/* Upload icon */}
+              <button
+                onClick={() => {
+                  setSidebarPanel('uploads');
+                  setIsSidebarOpen(true);
+                }}
+                className="p-2.5 rounded transition-all cursor-pointer"
+                style={{
+                  color: isSidebarOpen && sidebarPanel === 'uploads' ? ui.activityBarActiveBorder : ui.activityBarFg,
+                  borderLeft: isSidebarOpen && sidebarPanel === 'uploads' ? `2px solid ${ui.activityBarActiveBorder}` : '2px solid transparent',
+                }}
+                title="Uploads"
+              >
+                <VscCloudUpload className="w-5 h-5" />
+              </button>
             </div>
 
-            {/* Bottom Activity Bar Settings Gear */}
-            <div className="flex flex-col items-center space-y-3">
+            <div className="flex flex-col items-center space-y-2 relative">
+              {/* Account button */}
+              <button
+                onClick={() => setIsProfileOpen((prev) => !prev)}
+                className="p-2.5 transition-colors hover:opacity-80 cursor-pointer"
+                style={{ color: user ? '#34d399' : ui.activityBarFg }}
+                title={user ? `Signed in as ${user.username}` : "Sign In / Register"}
+              >
+                <VscAccount className="w-5 h-5" />
+              </button>
+
+              <ProfilePopover
+                isOpen={isProfileOpen}
+                onClose={() => setIsProfileOpen(false)}
+                themeConfig={themeConfig}
+              />
+
               <button
                 onClick={() => setIsSettingsOpen(true)}
                 className="p-2.5 transition-colors hover:opacity-80 cursor-pointer"
@@ -394,7 +488,7 @@ function CodeSpacePage() {
             </div>
           </div>
 
-          {/* Collapsible & Resizable File Explorer Sidebar */}
+          {/* Collapsible & Resizable Sidebar */}
           {isSidebarOpen && (
             <div
               className="h-full overflow-hidden shrink-0 relative flex"
@@ -404,27 +498,49 @@ function CodeSpacePage() {
               }}
             >
               <div className="w-full h-full overflow-hidden">
-                <FileExplorer
-                  files={files}
-                  spaceName={spaceName}
-                  onFileSelect={handleFileSelect}
-                  activeFile={activeFile}
-                  onDeleteFile={handleDelete}
-                  onCreateFile={handleCreateFile}
-                  themeConfig={themeConfig}
-                />
+                {sidebarPanel === 'explorer' ? (
+                  <FileExplorer
+                    files={files}
+                    spaceName={spaceName}
+                    onFileSelect={handleFileSelect}
+                    activeFile={activeFile}
+                    onDeleteFile={handleDelete}
+                    onCreateFile={handleCreateFile}
+                    onCreateFolder={handleCreateFolder}
+                    themeConfig={themeConfig}
+                    isOwner={!!user}
+                  />
+                ) : (
+                  <UploadPanel
+                    uploadedFiles={uploadedFiles}
+                    selectedUpload={selectedUpload}
+                    onSelect={(f) => { setSelectedUpload(f); setActiveFile(null); }}
+                    onDelete={(name) => {
+                      setUploadedFiles(prev => prev.filter(f => f.name !== name));
+                      if (selectedUpload?.name === name) setSelectedUpload(null);
+                    }}
+                    onUpload={(picked) => {
+                      const newEntries = picked.map(file => ({
+                        name: file.name,
+                        url: URL.createObjectURL(file),
+                        type: file.type,
+                        size: file.size,
+                      }));
+                      setUploadedFiles(prev => {
+                        const names = new Set(prev.map(f => f.name));
+                        return [...prev, ...newEntries.filter(f => !names.has(f.name))];
+                      });
+                    }}
+                    themeConfig={themeConfig}
+                  />
+                )}
               </div>
 
-              {/* VS Code Sashes / Resizer Handle */}
+              {/* Resizer Handle */}
               <div
-                onMouseDown={(e) => {
-                  e.preventDefault();
-                  setIsResizing(true);
-                }}
+                onMouseDown={(e) => { e.preventDefault(); setIsResizing(true); }}
                 className="absolute right-0 top-0 bottom-0 w-1.5 cursor-col-resize hover:bg-[#007acc]/60 transition-colors z-30"
-                style={{
-                  backgroundColor: isResizing ? ui.activeBorder : 'transparent',
-                }}
+                style={{ backgroundColor: isResizing ? ui.activeBorder : 'transparent' }}
                 title="Drag to resize"
               />
             </div>
@@ -443,6 +559,7 @@ function CodeSpacePage() {
               onTabClose={handleTabClose}
               isPublic={isPublic}
               onTogglePrivacy={handleTogglePrivacy}
+              onOpenShare={() => setIsShareModalOpen(true)}
               themeConfig={themeConfig}
             />
 
@@ -451,7 +568,9 @@ function CodeSpacePage() {
               className="flex-1 min-h-0 relative overflow-hidden"
               style={{ backgroundColor: ui.editorBg }}
             >
-              {activeFile ? (
+              {selectedUpload ? (
+                <UploadPreview file={selectedUpload} themeConfig={themeConfig} />
+              ) : activeFile ? (
                 <Editor
                   key={activeFile.name}
                   fileName={activeFile.name}
@@ -486,9 +605,12 @@ function CodeSpacePage() {
               <VscSourceControl className="w-3.5 h-3.5" />
               <span>main</span>
             </span>
-            <span>{spaceName}</span>
+            <span>{customSlug ? `/${customSlug}` : spaceName}</span>
             <span className="opacity-80">
               {isPublic ? 'Public' : 'Protected'}
+            </span>
+            <span className="opacity-75">
+              {user ? 'Retention: 60 Days' : 'Retention: 3 Days (Guest)'}
             </span>
           </div>
 

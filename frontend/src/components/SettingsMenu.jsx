@@ -53,7 +53,7 @@ function SettingsMenu({
   );
 
   return (
-    <div className="fixed inset-0 z-50 flex items-start justify-center pt-16 bg-black/40 backdrop-blur-xs">
+    <div className="fixed inset-0 z-50 flex items-start justify-center pt-16 bg-black/40 backdrop-blur-xs select-none">
       {/* VS Code Command Palette / QuickPick Dropdown Box */}
       <div
         ref={menuRef}
@@ -107,9 +107,6 @@ function SettingsMenu({
               onClose();
             }}
             className="flex items-center justify-between px-3 py-2 rounded cursor-pointer transition-colors"
-            style={{
-              backgroundColor: 'transparent',
-            }}
             onMouseEnter={(e) => {
               e.currentTarget.style.backgroundColor = ui.sidebarHover;
             }}
@@ -145,7 +142,7 @@ function SettingsMenu({
         </div>
 
         {/* Theme List / QuickPick Items */}
-        <div className="max-h-[320px] overflow-y-auto p-1">
+        <div className="max-h-[260px] overflow-y-auto p-1">
           <div className="px-3 py-1.5 text-[11px] uppercase tracking-wider font-semibold opacity-60">
             Color Themes
           </div>
@@ -200,4 +197,3 @@ function SettingsMenu({
 }
 
 export default SettingsMenu;
-
