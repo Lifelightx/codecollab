@@ -30,6 +30,11 @@ function CodeSpacePage() {
   const [isPublic, setIsPublic] = useState(true);
   const [isSetPrivacyModalOpen, setIsSetPrivacyModalOpen] = useState(false);
   const [isSidebarOpen, setIsSidebarOpen] = useState(true);
+  const [sidebarWidth, setSidebarWidth] = useState(() => {
+    const saved = localStorage.getItem('codecollab-sidebar-width');
+    return saved ? parseInt(saved, 10) : 240;
+  });
+  const [isResizing, setIsResizing] = useState(false);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   
   // Theme state with localStorage persistence
@@ -44,6 +49,45 @@ function CodeSpacePage() {
     setCurrentTheme(newTheme);
     localStorage.setItem('codecollab-theme', newTheme);
   };
+
+  // Resizable sidebar mouse event handlers
+  useEffect(() => {
+    const handleMouseMove = (e) => {
+      if (!isResizing) return;
+      // 48px is the fixed activity bar width
+      const newWidth = e.clientX - 48;
+      if (newWidth >= 160 && newWidth <= 600) {
+        setSidebarWidth(newWidth);
+      }
+    };
+
+    const handleMouseUp = () => {
+      if (isResizing) {
+        setIsResizing(false);
+        setSidebarWidth((prev) => {
+          localStorage.setItem('codecollab-sidebar-width', prev.toString());
+          return prev;
+        });
+      }
+    };
+
+    if (isResizing) {
+      window.addEventListener('mousemove', handleMouseMove);
+      window.addEventListener('mouseup', handleMouseUp);
+      document.body.style.cursor = 'col-resize';
+      document.body.style.userSelect = 'none';
+    } else {
+      document.body.style.cursor = '';
+      document.body.style.userSelect = '';
+    }
+
+    return () => {
+      window.removeEventListener('mousemove', handleMouseMove);
+      window.removeEventListener('mouseup', handleMouseUp);
+      document.body.style.cursor = '';
+      document.body.style.userSelect = '';
+    };
+  }, [isResizing]);
 
   // --- Fetch data ---
   const fetchCodeSpaceData = async (passcode = null) => {
@@ -85,6 +129,12 @@ function CodeSpacePage() {
       setIsLoading(false);
     }
   };
+
+  useEffect(() => {
+    document.title = activeFile 
+      ? `${activeFile.name} - ${spaceName} · CodeCollab` 
+      : `${spaceName} · CodeCollab`;
+  }, [activeFile, spaceName]);
 
   useEffect(() => {
     fetch(`${API_URL}/codespaces/${spaceName}/status`)
@@ -187,13 +237,19 @@ function CodeSpacePage() {
   };
 
   const handleCreateFile = (fileName) => {
-    let finalFileName = fileName;
-    if (!fileName.includes('.')) finalFileName += '.txt';
-    if (files.some((f) => f.name === finalFileName)) {
+    let finalFileName = fileName.trim();
+    // Allow extensions or dot-less known filenames like 'Dockerfile'
+    if (!finalFileName.includes('.') && finalFileName.toLowerCase() !== 'dockerfile') {
+      finalFileName += '.txt';
+    }
+    if (files.some((f) => f.name.toLowerCase() === finalFileName.toLowerCase())) {
       alert('A file with this name already exists.');
       return;
     }
-    const language = finalFileName.split('.').pop() || 'plaintext';
+    const language = finalFileName.toLowerCase() === 'dockerfile' 
+      ? 'dockerfile' 
+      : (finalFileName.split('.').pop() || 'plaintext');
+
     socketRef.current?.emit('create-file', {
       spaceName,
       fileName: finalFileName,
@@ -338,24 +394,41 @@ function CodeSpacePage() {
             </div>
           </div>
 
-          {/* Collapsible File Explorer Sidebar */}
-          <div
-            className={`transition-[width] duration-150 ease-out h-full overflow-hidden shrink-0 ${
-              isSidebarOpen ? 'w-60' : 'w-0'
-            }`}
-          >
-            <div className="w-60 h-full">
-              <FileExplorer
-                files={files}
-                spaceName={spaceName}
-                onFileSelect={handleFileSelect}
-                activeFile={activeFile}
-                onDeleteFile={handleDelete}
-                onCreateFile={handleCreateFile}
-                themeConfig={themeConfig}
+          {/* Collapsible & Resizable File Explorer Sidebar */}
+          {isSidebarOpen && (
+            <div
+              className="h-full overflow-hidden shrink-0 relative flex"
+              style={{
+                width: `${sidebarWidth}px`,
+                transition: isResizing ? 'none' : 'width 0.15s ease-out',
+              }}
+            >
+              <div className="w-full h-full overflow-hidden">
+                <FileExplorer
+                  files={files}
+                  spaceName={spaceName}
+                  onFileSelect={handleFileSelect}
+                  activeFile={activeFile}
+                  onDeleteFile={handleDelete}
+                  onCreateFile={handleCreateFile}
+                  themeConfig={themeConfig}
+                />
+              </div>
+
+              {/* VS Code Sashes / Resizer Handle */}
+              <div
+                onMouseDown={(e) => {
+                  e.preventDefault();
+                  setIsResizing(true);
+                }}
+                className="absolute right-0 top-0 bottom-0 w-1.5 cursor-col-resize hover:bg-[#007acc]/60 transition-colors z-30"
+                style={{
+                  backgroundColor: isResizing ? ui.activeBorder : 'transparent',
+                }}
+                title="Drag to resize"
               />
             </div>
-          </div>
+          )}
 
           {/* Right Editor Pane */}
           <div 
@@ -381,6 +454,7 @@ function CodeSpacePage() {
               {activeFile ? (
                 <Editor
                   key={activeFile.name}
+                  fileName={activeFile.name}
                   language={activeFile.language}
                   value={activeFile.content}
                   onChange={onCodeChange}

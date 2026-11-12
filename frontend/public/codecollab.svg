@@ -1,0 +1,26 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" width="100%" height="100%">
+  <defs>
+    <linearGradient id="gradient1" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#007acc" />
+      <stop offset="100%" stop-color="#0098ff" />
+    </linearGradient>
+    <linearGradient id="gradient2" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#1e1e1e" />
+      <stop offset="100%" stop-color="#252526" />
+    </linearGradient>
+  </defs>
+
+  <!-- Background Squircle / Rounded Container -->
+  <rect x="8" y="8" width="112" height="112" rx="28" fill="url(#gradient2)" stroke="#007acc" stroke-width="4" />
+
+  <!-- Code Brackets & Slash -->
+  <!-- Left Bracket < -->
+  <path d="M44 42 L24 64 L44 86" fill="none" stroke="url(#gradient1)" stroke-width="10" stroke-linecap="round" stroke-linejoin="round" />
+  
+  <!-- Right Bracket > -->
+  <path d="M84 42 L104 64 L84 86" fill="none" stroke="url(#gradient1)" stroke-width="10" stroke-linecap="round" stroke-linejoin="round" />
+
+  <!-- Center Slash / Collab Line -->
+  <path d="M72 36 L56 92" fill="none" stroke="#38bdf8" stroke-width="9" stroke-linecap="round" />
+</svg>
+

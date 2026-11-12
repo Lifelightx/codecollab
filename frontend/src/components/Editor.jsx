@@ -1,9 +1,22 @@
 import MonacoEditor from '@monaco-editor/react';
 
-const getMonacoLanguage = (extension) => {
-  switch (extension) {
+const getMonacoLanguage = (filenameOrExt) => {
+  if (!filenameOrExt) return 'plaintext';
+
+  const clean = filenameOrExt.toLowerCase();
+
+  // Exact filename matches
+  if (clean === 'dockerfile' || clean.startsWith('dockerfile.')) {
+    return 'dockerfile';
+  }
+
+  const ext = clean.includes('.') ? clean.split('.').pop() : clean;
+
+  switch (ext) {
     case 'js':
     case 'jsx':
+    case 'mjs':
+    case 'cjs':
       return 'javascript';
     case 'ts':
     case 'tsx':
@@ -13,13 +26,31 @@ const getMonacoLanguage = (extension) => {
     case 'java':
       return 'java';
     case 'html':
+    case 'htm':
       return 'html';
     case 'css':
+    case 'scss':
+    case 'less':
       return 'css';
     case 'json':
       return 'json';
+    case 'yml':
+    case 'yaml':
+      return 'yaml';
+    case 'dockerfile':
+      return 'dockerfile';
+    case 'log':
+      return 'log';
     case 'md':
+    case 'markdown':
       return 'markdown';
+    case 'sh':
+    case 'bash':
+      return 'shell';
+    case 'sql':
+      return 'sql';
+    case 'xml':
+      return 'xml';
     case 'txt':
     default:
       return 'plaintext';
@@ -201,7 +232,7 @@ export const getThemeConfig = (themeId) => {
   return THEME_OPTIONS.find((t) => t.id === themeId) || THEME_OPTIONS[0];
 };
 
-function Editor({ language, value, onChange, theme = 'vs-dark' }) {
+function Editor({ language, value, onChange, theme = 'vs-dark', fileName }) {
   function handleEditorChange(val) {
     if (onChange) {
       onChange(val);
@@ -209,11 +240,49 @@ function Editor({ language, value, onChange, theme = 'vs-dark' }) {
   }
 
   const handleBeforeMount = (monaco) => {
+    // Register custom log language tokenizer
+    if (!monaco.languages.getLanguages().some((l) => l.id === 'log')) {
+      monaco.languages.register({ id: 'log' });
+      monaco.languages.setMonarchTokensProvider('log', {
+        tokenizer: {
+          root: [
+            // Error / Critical (Red)
+            [/\b(ERROR|FATAL|CRITICAL|FAIL|FAILURE|EXCEPTION|Err)\b/i, 'custom-error'],
+            // Warning (Yellow/Orange)
+            [/\b(WARN|WARNING|ATTENTION|ALERT)\b/i, 'custom-warning'],
+            // Success / Info (Green/Cyan)
+            [/\b(INFO|SUCCESS|OK|PASSED|COMPLETED)\b/i, 'custom-info'],
+            // Debug / Trace (Blue/Purple)
+            [/\b(DEBUG|TRACE|VERBOSE)\b/i, 'custom-debug'],
+            // Timestamps: 2026-11-12, 10:45:00, ISO dates
+            [/\b\d{4}[-/.]\d{2}[-/.]\d{2}([T ]\d{2}:\d{2}:\d{2}(\.\d+)?)?Z?\b/, 'custom-date'],
+            // IP addresses / HTTP methods
+            [/\b(GET|POST|PUT|DELETE|PATCH|OPTIONS|HEAD)\b/, 'keyword'],
+            [/\b\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}\b/, 'number'],
+            // Bracketed sections like [system]
+            [/\[.*?\]/, 'type'],
+            // String literals
+            [/"([^"\\]|\\.)*"/, 'string'],
+            [/'([^'\\]|\\.)*'/, 'string'],
+          ],
+        },
+      });
+    }
+
+    const logThemeRules = [
+      { token: 'custom-error', foreground: 'F48771', fontStyle: 'bold' },
+      { token: 'custom-warning', foreground: 'CCA700', fontStyle: 'bold' },
+      { token: 'custom-info', foreground: '75BEFF' },
+      { token: 'custom-debug', foreground: 'B180D7' },
+      { token: 'custom-date', foreground: '858585' },
+    ];
+
     // Monokai
     monaco.editor.defineTheme('monokai', {
       base: 'vs-dark',
       inherit: true,
       rules: [
+        ...logThemeRules,
         { token: 'comment', foreground: '75715E' },
         { token: 'keyword', foreground: 'F92672' },
         { token: 'string', foreground: 'E6DB74' },
@@ -235,6 +304,7 @@ function Editor({ language, value, onChange, theme = 'vs-dark' }) {
       base: 'vs-dark',
       inherit: true,
       rules: [
+        ...logThemeRules,
         { token: 'comment', foreground: '6272A4' },
         { token: 'keyword', foreground: 'FF79C6' },
         { token: 'string', foreground: 'F1FA8C' },
@@ -256,6 +326,7 @@ function Editor({ language, value, onChange, theme = 'vs-dark' }) {
       base: 'vs-dark',
       inherit: true,
       rules: [
+        ...logThemeRules,
         { token: 'comment', foreground: '8B949E' },
         { token: 'keyword', foreground: 'FF7B72' },
         { token: 'string', foreground: 'A5D6FF' },
@@ -277,6 +348,7 @@ function Editor({ language, value, onChange, theme = 'vs-dark' }) {
       base: 'vs-dark',
       inherit: true,
       rules: [
+        ...logThemeRules,
         { token: 'comment', foreground: '4C566A' },
         { token: 'keyword', foreground: '81A1C1' },
         { token: 'string', foreground: 'A3BE8C' },
@@ -294,7 +366,7 @@ function Editor({ language, value, onChange, theme = 'vs-dark' }) {
     });
   };
 
-  const monacoLanguage = getMonacoLanguage(language);
+  const monacoLanguage = getMonacoLanguage(language || fileName);
 
   return (
     <div className="h-full w-full">
