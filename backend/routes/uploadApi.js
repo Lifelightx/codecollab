@@ -5,7 +5,8 @@ const { v4: uuidv4 } = require('uuid');
 const express = require('express');
 const Upload = require('../models/Upload');
 const User = require('../models/User');
-const { optionalAuth } = require('../middleware/auth');
+const Codespace = require('../models/codeSpace');
+const { optionalAuth, requireAuth } = require('../middleware/auth');
 
 const router = express.Router();
 
@@ -13,11 +14,9 @@ const router = express.Router();
 const UPLOAD_DIR = path.join(__dirname, '../uploads');
 if (!fs.existsSync(UPLOAD_DIR)) fs.mkdirSync(UPLOAD_DIR, { recursive: true });
 
-// Per-user limits
-const GUEST_MAX_FILE_BYTES  = 5  * 1024 * 1024;  // 5 MB per file  (guests)
-const AUTH_MAX_FILE_BYTES   = 200 * 1024 * 1024;  // 200 MB per file (auth users)
-const GUEST_QUOTA_BYTES     = 20 * 1024 * 1024;  // 20 MB total quota (guests)
-const AUTH_QUOTA_BYTES      = 200 * 1024 * 1024; // 200 MB total quota (auth users)
+// Per-user limits (auth users only)
+const MAX_FILE_BYTES  = 200 * 1024 * 1024; // 200 MB per file
+const QUOTA_BYTES     = 200 * 1024 * 1024; // 200 MB total per user
 
 // ── Multer storage – uuid-named file, preserve extension ──────────
 const storage = multer.diskStorage({
@@ -28,28 +27,27 @@ const storage = multer.diskStorage({
   },
 });
 
-// Generous limit – we enforce exact limits per-user in route
 const upload = multer({
   storage,
-  limits: { fileSize: AUTH_MAX_FILE_BYTES },
+  limits: { fileSize: MAX_FILE_BYTES },
 });
 
-// ── Helper ────────────────────────────────────────────────────────
-const getExpirationDate = (isAuthenticated) => {
-  const days = isAuthenticated ? 60 : 3;
-  return new Date(Date.now() + days * 24 * 60 * 60 * 1000);
-};
+// ── Helper: resolve spaceName → Codespace doc ─────────────────────
+async function resolveSpace(spaceName) {
+  if (!spaceName) return null;
+  return Codespace.findOne({ name: spaceName.toLowerCase().trim() });
+}
 
-// ── POST /api/uploads  (upload one or more files) ─────────────────
+// ── POST /api/uploads  (upload files – auth required, space required) ──
 router.post(
   '/',
-  optionalAuth,
+  requireAuth,
   (req, res, next) => {
     upload.array('files', 20)(req, res, (err) => {
       if (err instanceof multer.MulterError) {
         if (err.code === 'LIMIT_FILE_SIZE') {
           return res.status(413).json({
-            message: `File exceeds maximum allowed size (${AUTH_MAX_FILE_BYTES / (1024 * 1024)} MB).`,
+            message: `File exceeds maximum allowed size (${MAX_FILE_BYTES / (1024 * 1024)} MB).`,
           });
         }
         return res.status(400).json({ message: `Upload error: ${err.message}` });
@@ -60,179 +58,198 @@ router.post(
     });
   },
   async (req, res) => {
-  if (!req.files || req.files.length === 0) {
-    return res.status(400).json({ message: 'No files uploaded.' });
-  }
-
-  const isAuth = !!req.user;
-  const maxPerFile = isAuth ? AUTH_MAX_FILE_BYTES : GUEST_MAX_FILE_BYTES;
-  const quota      = isAuth ? AUTH_QUOTA_BYTES    : GUEST_QUOTA_BYTES;
-
-  // Check individual file size limits
-  for (const f of req.files) {
-    if (f.size > maxPerFile) {
-      // remove already-saved files
-      req.files.forEach(rf => fs.unlink(rf.path, () => {}));
-      return res.status(413).json({
-        message: `File "${f.originalname}" exceeds the ${isAuth ? '50 MB' : '5 MB'} per-file limit.`,
-      });
+    if (!req.files || req.files.length === 0) {
+      return res.status(400).json({ message: 'No files uploaded.' });
     }
-  }
 
-  // Check quota – sum existing + incoming
-  try {
-    const filter = isAuth
-      ? { ownerId: req.user.id }
-      : { ownerId: null, createdAt: { $gte: new Date(Date.now() - 3 * 24 * 60 * 60 * 1000) } };
-
-    const existing = await Upload.aggregate([
-      { $match: filter },
-      { $group: { _id: null, total: { $sum: '$size' } } },
-    ]);
-
-    const usedBytes  = existing[0]?.total ?? 0;
-    const incomingBytes = req.files.reduce((s, f) => s + f.size, 0);
-
-    if (usedBytes + incomingBytes > quota) {
+    const { spaceName } = req.body;
+    if (!spaceName) {
       req.files.forEach(f => fs.unlink(f.path, () => {}));
-      return res.status(413).json({
-        message: `Upload would exceed your storage quota (${isAuth ? '200 MB' : '20 MB'}).`,
-      });
+      return res.status(400).json({ message: 'spaceName is required.' });
     }
 
-    // Save records to DB
-    const docs = req.files.map(f => ({
-      originalName: f.originalname,
-      storedName:   f.filename,
-      mimeType:     f.mimetype,
-      size:         f.size,
-      ownerId:      isAuth ? req.user.id : null,
-      expiresAt:    getExpirationDate(isAuth),
-    }));
+    const space = await resolveSpace(spaceName);
+    if (!space) {
+      req.files.forEach(f => fs.unlink(f.path, () => {}));
+      return res.status(404).json({ message: 'Codespace not found.' });
+    }
 
-    const saved = await Upload.insertMany(docs);
+    // Check individual file size limits
+    for (const f of req.files) {
+      if (f.size > MAX_FILE_BYTES) {
+        req.files.forEach(rf => fs.unlink(rf.path, () => {}));
+        return res.status(413).json({
+          message: `File "${f.originalname}" exceeds the ${MAX_FILE_BYTES / (1024 * 1024)} MB per-file limit.`,
+        });
+      }
+    }
 
-    let updatedStorageUsed = usedBytes + incomingBytes;
-    if (isAuth) {
+    try {
+      // Check user quota
+      const existing = await Upload.aggregate([
+        { $match: { ownerId: req.user._id ?? req.user.id } },
+        { $group: { _id: null, total: { $sum: '$size' } } },
+      ]);
+
+      const usedBytes     = existing[0]?.total ?? 0;
+      const incomingBytes = req.files.reduce((s, f) => s + f.size, 0);
+
+      if (usedBytes + incomingBytes > QUOTA_BYTES) {
+        req.files.forEach(f => fs.unlink(f.path, () => {}));
+        return res.status(413).json({
+          message: `Upload would exceed your storage quota (${QUOTA_BYTES / (1024 * 1024)} MB).`,
+        });
+      }
+
+      const expiresAt = new Date(Date.now() + 60 * 24 * 60 * 60 * 1000); // 60 days
+
+      const docs = req.files.map(f => ({
+        originalName: f.originalname,
+        storedName:   f.filename,
+        mimeType:     f.mimetype,
+        size:         f.size,
+        ownerId:      req.user.id,
+        spaceId:      space._id,
+        expiresAt,
+      }));
+
+      const saved = await Upload.insertMany(docs);
+
       const updatedUser = await User.findByIdAndUpdate(
         req.user.id,
         { $inc: { storageUsedBytes: incomingBytes } },
         { new: true }
       );
-      if (updatedUser) {
-        updatedStorageUsed = updatedUser.storageUsedBytes;
-      }
+
+      return res.status(201).json({
+        uploads: saved,
+        storageUsedBytes: updatedUser?.storageUsedBytes ?? usedBytes + incomingBytes,
+      });
+
+    } catch (err) {
+      console.error('Upload error:', err);
+      req.files.forEach(f => fs.unlink(f.path, () => {}));
+      return res.status(500).json({ message: 'Server error during upload.' });
     }
-
-    return res.status(201).json({
-      uploads: saved,
-      storageUsedBytes: updatedStorageUsed,
-    });
-
-  } catch (err) {
-    console.error('Upload error:', err);
-    req.files.forEach(f => fs.unlink(f.path, () => {}));
-    return res.status(500).json({ message: 'Server error during upload.' });
   }
-});
+);
 
-// ── GET /api/uploads  (list uploads for current user/session) ─────
+// ── GET /api/uploads?spaceName=xxx  (list uploads for a space – open to anyone with access) ──
 router.get('/', optionalAuth, async (req, res) => {
   try {
-    const isAuth = !!req.user;
-    const filter = isAuth
-      ? { ownerId: req.user.id }
-      : { ownerId: null, createdAt: { $gte: new Date(Date.now() - 3 * 24 * 60 * 60 * 1000) } };
-
-    const uploads = await Upload.find(filter).sort({ createdAt: -1 });
-
-    // Also return used quota
-    const usedBytes = uploads.reduce((s, u) => s + u.size, 0);
-    const quota     = isAuth ? AUTH_QUOTA_BYTES : GUEST_QUOTA_BYTES;
-
-    // Self-heal / sync User.storageUsedBytes if authenticated user has existing uploads
-    if (isAuth) {
-      await User.findByIdAndUpdate(req.user.id, { storageUsedBytes: usedBytes });
+    const { spaceName } = req.query;
+    if (!spaceName) {
+      return res.status(400).json({ message: 'spaceName query param is required.' });
     }
 
-    return res.json({ uploads, usedBytes, quota, storageUsedBytes: usedBytes });
+    const space = await resolveSpace(spaceName);
+    if (!space) return res.status(404).json({ message: 'Codespace not found.' });
+
+    const uploads = await Upload.find({ spaceId: space._id }).sort({ createdAt: -1 });
+
+    // Return user's own quota info if signed in
+    let storageUsedBytes = 0;
+    if (req.user) {
+      const agg = await Upload.aggregate([
+        { $match: { ownerId: req.user._id } },
+        { $group: { _id: null, total: { $sum: '$size' } } },
+      ]);
+      storageUsedBytes = agg[0]?.total ?? 0;
+      await User.findByIdAndUpdate(req.user.id, { storageUsedBytes });
+    }
+
+    return res.json({ uploads, storageUsedBytes, quota: QUOTA_BYTES });
   } catch (err) {
     return res.status(500).json({ message: 'Failed to list uploads.' });
   }
 });
 
-// ── DELETE /api/uploads/clear-all  (delete all files for current user) ───────────
-router.delete('/clear-all', optionalAuth, async (req, res) => {
+// ── GET /api/uploads/:id/meta  (single upload metadata for deep-link) ──
+router.get('/:id/meta', optionalAuth, async (req, res) => {
   try {
-    const isAuth = !!req.user;
-    const filter = isAuth
-      ? { ownerId: req.user.id }
-      : { ownerId: null, createdAt: { $gte: new Date(Date.now() - 3 * 24 * 60 * 60 * 1000) } };
+    const doc = await Upload.findById(req.params.id);
+    if (!doc) return res.status(404).json({ message: 'Upload not found.' });
+    return res.json({ upload: doc });
+  } catch {
+    return res.status(404).json({ message: 'Not found.' });
+  }
+});
+
+// ── DELETE /api/uploads/clear-all  (delete all files the user uploaded to a space) ──
+router.delete('/clear-all', requireAuth, async (req, res) => {
+  try {
+    const { spaceName } = req.query;
+    const filter = { ownerId: req.user.id };
+    if (spaceName) {
+      const space = await resolveSpace(spaceName);
+      if (space) filter.spaceId = space._id;
+    }
 
     const docs = await Upload.find(filter);
-
-    // Delete all files from disk
     docs.forEach(doc => {
       const filePath = path.join(UPLOAD_DIR, doc.storedName);
       fs.unlink(filePath, () => {});
     });
 
+    const totalSize = docs.reduce((s, d) => s + d.size, 0);
     await Upload.deleteMany(filter);
 
-    if (isAuth) {
-      await User.findByIdAndUpdate(req.user.id, { storageUsedBytes: 0 });
+    const updatedUser = await User.findByIdAndUpdate(
+      req.user.id,
+      { $inc: { storageUsedBytes: -totalSize } },
+      { new: true }
+    );
+
+    // Clamp to 0
+    if (updatedUser && updatedUser.storageUsedBytes < 0) {
+      updatedUser.storageUsedBytes = 0;
+      await updatedUser.save();
     }
 
-    return res.json({ message: 'All files cleared.', storageUsedBytes: 0, count: docs.length });
+    return res.json({
+      message: 'All files cleared.',
+      storageUsedBytes: updatedUser?.storageUsedBytes ?? 0,
+      count: docs.length,
+    });
   } catch (err) {
     console.error('Clear-all error:', err);
     return res.status(500).json({ message: 'Failed to clear all files.' });
   }
 });
 
-// ── DELETE /api/uploads/:id  (delete a file) ──────────────────────
-router.delete('/:id', optionalAuth, async (req, res) => {
+// ── DELETE /api/uploads/:id  (delete a file – only uploader can delete) ──
+router.delete('/:id', requireAuth, async (req, res) => {
   try {
     const doc = await Upload.findById(req.params.id);
     if (!doc) return res.status(404).json({ message: 'Upload not found.' });
 
-    // Only the owner (or guest with no owner) may delete
-    const isOwner = req.user
-      ? doc.ownerId?.toString() === req.user.id
-      : !doc.ownerId; // guest: allow deletion if not owned by anyone
-
-    if (!isOwner) return res.status(403).json({ message: 'Forbidden.' });
-
-    // Delete from disk
-    const filePath = path.join(UPLOAD_DIR, doc.storedName);
-    fs.unlink(filePath, () => {}); // ignore error if already gone
-
-    await doc.deleteOne();
-
-    let updatedStorageUsed = 0;
-    if (doc.ownerId) {
-      const updatedUser = await User.findByIdAndUpdate(
-        doc.ownerId,
-        { $inc: { storageUsedBytes: -doc.size } },
-        { new: true }
-      );
-      if (updatedUser) {
-        // Prevent negative storageUsedBytes in edge cases
-        if (updatedUser.storageUsedBytes < 0) {
-          updatedUser.storageUsedBytes = 0;
-          await updatedUser.save();
-        }
-        updatedStorageUsed = updatedUser.storageUsedBytes;
-      }
+    // Only the original uploader may delete
+    if (doc.ownerId?.toString() !== req.user.id) {
+      return res.status(403).json({ message: 'Forbidden: only the uploader can delete this file.' });
     }
 
-    return res.json({ message: 'Deleted.', storageUsedBytes: updatedStorageUsed });
+    const filePath = path.join(UPLOAD_DIR, doc.storedName);
+    fs.unlink(filePath, () => {});
+    await doc.deleteOne();
+
+    const updatedUser = await User.findByIdAndUpdate(
+      doc.ownerId,
+      { $inc: { storageUsedBytes: -doc.size } },
+      { new: true }
+    );
+
+    if (updatedUser && updatedUser.storageUsedBytes < 0) {
+      updatedUser.storageUsedBytes = 0;
+      await updatedUser.save();
+    }
+
+    return res.json({ message: 'Deleted.', storageUsedBytes: updatedUser?.storageUsedBytes ?? 0 });
   } catch (err) {
     return res.status(500).json({ message: 'Failed to delete upload.' });
   }
 });
 
-// ── GET /api/uploads/share/:id  (serve / share a file by its MongoDB _id) ─────────
+// ── GET /api/uploads/share/:id  (serve / stream a file – open to anyone) ──
 router.get('/share/:id', async (req, res) => {
   try {
     const doc = await Upload.findById(req.params.id);

@@ -25,8 +25,8 @@ function fmtBytes(b) {
 }
 
 // ── UPLOAD PANEL (sidebar list) ─────────────────────────────────
-export function UploadPanel({ selectedUpload, onSelect, themeConfig, spaceName }) {
-  const { API_URL, updateUserStorage } = useAppContext();
+export function UploadPanel({ selectedUpload, onSelect, themeConfig, spaceName, defaultFileId }) {
+  const { API_URL, updateUserStorage, user } = useAppContext();
   const uploadRef = useRef(null);
   const [copied, setCopied]         = useState(false);
   const [uploads, setUploads]       = useState([]);
@@ -41,11 +41,12 @@ export function UploadPanel({ selectedUpload, onSelect, themeConfig, spaceName }
     border: '#1e1e1e',
   };
 
-  // ── Fetch uploads list from API ──
+  // ── Fetch uploads for this codespace ──
   const fetchUploads = useCallback(async () => {
+    if (!spaceName) return;
     try {
       setLoading(true);
-      const res = await axios.get(`${API_URL}/uploads`);
+      const res = await axios.get(`${API_URL}/uploads`, { params: { spaceName } });
       setUploads(res.data.uploads || []);
       if (typeof res.data.storageUsedBytes === 'number') {
         updateUserStorage(res.data.storageUsedBytes);
@@ -55,20 +56,34 @@ export function UploadPanel({ selectedUpload, onSelect, themeConfig, spaceName }
     } finally {
       setLoading(false);
     }
-  }, [API_URL]);
+  }, [API_URL, spaceName]);
 
   useEffect(() => { fetchUploads(); }, [fetchUploads]);
 
-  // ── Upload files to backend ──
+  // Auto-select file from deep-link URL param
+  useEffect(() => {
+    if (defaultFileId && uploads.length > 0 && !selectedUpload) {
+      const match = uploads.find(u => u._id === defaultFileId);
+      if (match) onSelect(match);
+    }
+  }, [defaultFileId, uploads, selectedUpload, onSelect]);
+
+  // ── Upload files to this codespace (signed-in users only) ──
   const handleInputChange = async (e) => {
     const files = Array.from(e.target.files || []);
     if (!files.length) return;
     e.target.value = '';
 
+    if (!user) {
+      setError('You must be signed in to upload files.');
+      return;
+    }
+
     setUploading(true);
     setError('');
     const formData = new FormData();
     files.forEach(f => formData.append('files', f));
+    formData.append('spaceName', spaceName);
 
     try {
       const res = await axios.post(`${API_URL}/uploads`, formData, {
@@ -85,7 +100,7 @@ export function UploadPanel({ selectedUpload, onSelect, themeConfig, spaceName }
     }
   };
 
-  // ── Delete a file ──
+  // ── Delete a file (only uploader can delete) ──
   const handleDelete = async (e, upload) => {
     e.stopPropagation();
     try {
@@ -95,8 +110,8 @@ export function UploadPanel({ selectedUpload, onSelect, themeConfig, spaceName }
       }
       setUploads(prev => prev.filter(u => u._id !== upload._id));
       if (selectedUpload?._id === upload._id) onSelect(null);
-    } catch {
-      setError('Failed to delete.');
+    } catch (err) {
+      setError(err.response?.data?.message || 'Failed to delete.');
     }
   };
 
@@ -125,18 +140,22 @@ export function UploadPanel({ selectedUpload, onSelect, themeConfig, spaceName }
         style={{ color: ui.sidebarHeaderFg }}
       >
         <span>Uploads</span>
-        <button
-          onClick={() => uploadRef.current?.click()}
-          title="Upload Files"
-          disabled={uploading}
-          className="p-1 rounded hover:opacity-80 cursor-pointer disabled:opacity-40"
-          style={{ color: ui.sidebarFg }}
-        >
-          {uploading
-            ? <VscLoading className="w-4 h-4 animate-spin" />
-            : <VscCloudUpload className="w-4 h-4" />
-          }
-        </button>
+        {user ? (
+          <button
+            onClick={() => uploadRef.current?.click()}
+            title="Upload Files"
+            disabled={uploading}
+            className="p-1 rounded hover:opacity-80 cursor-pointer disabled:opacity-40"
+            style={{ color: ui.sidebarFg }}
+          >
+            {uploading
+              ? <VscLoading className="w-4 h-4 animate-spin" />
+              : <VscCloudUpload className="w-4 h-4" />
+            }
+          </button>
+        ) : (
+          <span className="text-[10px] opacity-50 normal-case tracking-normal font-normal">sign in to upload</span>
+        )}
         <input ref={uploadRef} type="file" multiple className="hidden" onChange={handleInputChange} />
       </div>
 
@@ -155,11 +174,15 @@ export function UploadPanel({ selectedUpload, onSelect, themeConfig, spaceName }
           </div>
         ) : uploads.length === 0 ? (
           <div
-            className="flex flex-col items-center justify-center gap-3 py-12 opacity-50 cursor-pointer hover:opacity-70 transition-opacity"
-            onClick={() => uploadRef.current?.click()}
+            className={`flex flex-col items-center justify-center gap-3 py-12 opacity-50 transition-opacity ${user ? 'cursor-pointer hover:opacity-70' : ''}`}
+            onClick={() => user && uploadRef.current?.click()}
           >
             <VscCloudUpload className="w-8 h-8" />
-            <span className="text-xs text-center px-4">Click to upload files<br />Images, video, audio, PDF…</span>
+            <span className="text-xs text-center px-4">
+              {user
+                ? <>Click to upload files<br />Images, video, audio, PDF…</>
+                : 'No files uploaded yet'}
+            </span>
           </div>
         ) : (
           uploads.map((upload) => {
@@ -181,6 +204,7 @@ export function UploadPanel({ selectedUpload, onSelect, themeConfig, spaceName }
                   {upload.originalName}
                 </span>
                 <span className="text-[10px] opacity-40 shrink-0">{fmtBytes(upload.size)}</span>
+                {user && user.id === upload.ownerId?.toString() && (
                 <button
                   onClick={e => handleDelete(e, upload)}
                   className="opacity-0 group-hover:opacity-100 hover:text-red-400 p-0.5 shrink-0 transition-opacity"
@@ -188,6 +212,7 @@ export function UploadPanel({ selectedUpload, onSelect, themeConfig, spaceName }
                 >
                   <VscTrash className="w-3 h-3" />
                 </button>
+                )}
               </div>
             );
           })

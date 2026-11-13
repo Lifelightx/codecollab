@@ -1,5 +1,5 @@
 import { useEffect, useState, useRef } from 'react';
-import { useParams, useNavigate } from 'react-router-dom';
+import { useParams, useNavigate, useSearchParams } from 'react-router-dom';
 import { io } from 'socket.io-client';
 import { VscFiles, VscSettingsGear, VscSourceControl, VscColorMode, VscAccount, VscCloudUpload } from 'react-icons/vsc';
 
@@ -19,6 +19,7 @@ import { useAppContext } from '../Context';
 function CodeSpacePage() {
   const { spaceName } = useParams();
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
   const socketRef = useRef(null);
   const { 
     API_URL, 
@@ -142,6 +143,13 @@ function CodeSpacePage() {
       setShowAuthModal(false);
       setIsDataLoaded(true);
 
+      // Handle deep-link URL params (?tab=uploads&fileId=...)
+      const tabParam = searchParams.get('tab');
+      if (tabParam === 'uploads') {
+        setSidebarPanel('uploads');
+        setIsSidebarOpen(true);
+      }
+
       const socket = io(SOCKET_URL);
       socketRef.current = socket;
       socket.emit('join-space', { spaceName });
@@ -252,6 +260,7 @@ function CodeSpacePage() {
 
   const handleTabClick = (file) => {
     setActiveFile(file);
+    setSelectedUpload(null);
   };
 
   const handleTabClose = (fileName) => {
@@ -512,26 +521,11 @@ function CodeSpacePage() {
                   />
                 ) : (
                   <UploadPanel
-                    uploadedFiles={uploadedFiles}
                     selectedUpload={selectedUpload}
                     onSelect={(f) => { setSelectedUpload(f); setActiveFile(null); }}
-                    onDelete={(name) => {
-                      setUploadedFiles(prev => prev.filter(f => f.name !== name));
-                      if (selectedUpload?.name === name) setSelectedUpload(null);
-                    }}
-                    onUpload={(picked) => {
-                      const newEntries = picked.map(file => ({
-                        name: file.name,
-                        url: URL.createObjectURL(file),
-                        type: file.type,
-                        size: file.size,
-                      }));
-                      setUploadedFiles(prev => {
-                        const names = new Set(prev.map(f => f.name));
-                        return [...prev, ...newEntries.filter(f => !names.has(f.name))];
-                      });
-                    }}
                     themeConfig={themeConfig}
+                    spaceName={spaceName}
+                    defaultFileId={searchParams.get('fileId')}
                   />
                 )}
               </div>
