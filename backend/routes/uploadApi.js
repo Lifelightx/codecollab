@@ -249,6 +249,42 @@ router.delete('/:id', requireAuth, async (req, res) => {
   }
 });
 
+// ── PUT /api/uploads/:id  (update/overwrite an existing file content) ──
+const memoryUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: MAX_FILE_BYTES },
+});
+
+router.put('/:id', optionalAuth, memoryUpload.single('file'), async (req, res) => {
+  try {
+    const doc = await Upload.findById(req.params.id);
+    if (!doc) return res.status(404).json({ message: 'Upload not found.' });
+
+    if (!req.file) {
+      return res.status(400).json({ message: 'No file content provided.' });
+    }
+
+    const filePath = path.join(UPLOAD_DIR, doc.storedName);
+    fs.writeFileSync(filePath, req.file.buffer);
+
+    const oldSize = doc.size;
+    const newSize = req.file.size;
+    const diff = newSize - oldSize;
+
+    doc.size = newSize;
+    await doc.save();
+
+    if (doc.ownerId) {
+      await User.findByIdAndUpdate(doc.ownerId, { $inc: { storageUsedBytes: diff } });
+    }
+
+    return res.json({ message: 'File saved successfully.', upload: doc });
+  } catch (err) {
+    console.error('Update upload error:', err);
+    return res.status(500).json({ message: 'Failed to update file.' });
+  }
+});
+
 // ── GET /api/uploads/share/:id  (serve / stream a file – open to anyone) ──
 router.get('/share/:id', async (req, res) => {
   try {

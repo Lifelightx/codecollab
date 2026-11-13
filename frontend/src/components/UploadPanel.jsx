@@ -6,6 +6,9 @@ import {
 } from 'react-icons/vsc';
 import { useAppContext } from '../Context';
 import FileShareModal from './FileShareModal';
+import SpreadsheetEditor from './SpreadsheetEditor';
+import DocumentEditor from './DocumentEditor';
+import PdfViewer from './PdfViewer';
 
 // ── Helpers ─────────────────────────────────────────────────────
 function getFileType(mimeOrName) {
@@ -14,7 +17,9 @@ function getFileType(mimeOrName) {
   if (s.startsWith('video/') || /\.(mp4|webm|ogg|mov)$/.test(s)) return 'video';
   if (s.startsWith('audio/') || /\.(mp3|wav|ogg|flac)$/.test(s)) return 'audio';
   if (s === 'application/pdf' || s.endsWith('.pdf')) return 'pdf';
-  if (/\.(txt|md|json|xml|csv|log)$/.test(s)) return 'text';
+  if (/\.(xlsx|xls|csv)$/.test(s) || s.includes('spreadsheetml') || s.includes('ms-excel')) return 'spreadsheet';
+  if (/\.(docx|doc)$/.test(s) || s.includes('wordprocessingml') || s.includes('msword')) return 'document';
+  if (/\.(txt|md|json|xml|log)$/.test(s)) return 'text';
   return 'other';
 }
 
@@ -26,7 +31,7 @@ function fmtBytes(b) {
 
 // ── UPLOAD PANEL (sidebar list) ─────────────────────────────────
 export function UploadPanel({ selectedUpload, onSelect, themeConfig, spaceName, defaultFileId }) {
-  const { API_URL, updateUserStorage, user } = useAppContext();
+  const { API_URL, updateUserStorage, user, openAuthModal } = useAppContext();
   const uploadRef = useRef(null);
   const [copied, setCopied]         = useState(false);
   const [uploads, setUploads]       = useState([]);
@@ -140,22 +145,24 @@ export function UploadPanel({ selectedUpload, onSelect, themeConfig, spaceName, 
         style={{ color: ui.sidebarHeaderFg }}
       >
         <span>Uploads</span>
-        {user ? (
-          <button
-            onClick={() => uploadRef.current?.click()}
-            title="Upload Files"
-            disabled={uploading}
-            className="p-1 rounded hover:opacity-80 cursor-pointer disabled:opacity-40"
-            style={{ color: ui.sidebarFg }}
-          >
-            {uploading
-              ? <VscLoading className="w-4 h-4 animate-spin" />
-              : <VscCloudUpload className="w-4 h-4" />
+        <button
+          onClick={() => {
+            if (!user) {
+              openAuthModal('login');
+            } else {
+              uploadRef.current?.click();
             }
-          </button>
-        ) : (
-          <span className="text-[10px] opacity-50 normal-case tracking-normal font-normal">sign in to upload</span>
-        )}
+          }}
+          title={user ? 'Upload Files' : 'Sign in to upload'}
+          disabled={uploading}
+          className="p-1 rounded hover:opacity-80 cursor-pointer disabled:opacity-40 transition-opacity"
+          style={{ color: ui.sidebarFg }}
+        >
+          {uploading
+            ? <VscLoading className="w-4 h-4 animate-spin" />
+            : <VscCloudUpload className="w-4 h-4" />
+          }
+        </button>
         <input ref={uploadRef} type="file" multiple className="hidden" onChange={handleInputChange} />
       </div>
 
@@ -174,14 +181,22 @@ export function UploadPanel({ selectedUpload, onSelect, themeConfig, spaceName, 
           </div>
         ) : uploads.length === 0 ? (
           <div
-            className={`flex flex-col items-center justify-center gap-3 py-12 opacity-50 transition-opacity ${user ? 'cursor-pointer hover:opacity-70' : ''}`}
-            onClick={() => user && uploadRef.current?.click()}
+            className="flex flex-col items-center justify-center gap-3 py-12 opacity-60 transition-opacity cursor-pointer hover:opacity-90"
+            onClick={() => {
+              if (user) {
+                uploadRef.current?.click();
+              } else {
+                openAuthModal('login');
+              }
+            }}
           >
-            <VscCloudUpload className="w-8 h-8" />
-            <span className="text-xs text-center px-4">
-              {user
-                ? <>Click to upload files<br />Images, video, audio, PDF…</>
-                : 'No files uploaded yet'}
+            <VscCloudUpload className="w-8 h-8 opacity-60" />
+            <span className="text-xs text-center px-4 leading-relaxed">
+              {user ? (
+                <>Click to upload files<br /><span className="text-[10px] opacity-70">Images, video, audio, PDF…</span></>
+              ) : (
+                <>No files uploaded yet<br /><span className="text-[11px] text-blue-400 font-medium hover:underline">Sign in to upload</span></>
+              )}
             </span>
           </div>
         ) : (
@@ -279,6 +294,19 @@ export function UploadPreview({ file, themeConfig }) {
   const { API_URL, SOCKET_URL } = useAppContext();
   const ui   = themeConfig?.ui || { editorBg: '#1e1e1e', sidebarFg: '#cccccc' };
   const type = getFileType(file.mimeType || file.originalName);
+
+  // Directly embed full workspace editors for Spreadsheet and Word docs
+  if (type === 'spreadsheet') {
+    return <SpreadsheetEditor file={file} themeConfig={themeConfig} />;
+  }
+
+  if (type === 'document') {
+    return <DocumentEditor file={file} themeConfig={themeConfig} />;
+  }
+
+  if (type === 'pdf') {
+    return <PdfViewer file={file} themeConfig={themeConfig} />;
+  }
   
   // In dev, prefix with backend origin if configured (e.g. http://localhost:5000), otherwise relative /s/:id
   const backendOrigin = SOCKET_URL && SOCKET_URL !== '/' ? SOCKET_URL : '';

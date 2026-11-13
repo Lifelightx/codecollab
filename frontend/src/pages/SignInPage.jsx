@@ -1,15 +1,20 @@
-import { useAppContext } from '../Context';
+import { useNavigate } from 'react-router-dom';
 import AuthModal from '../components/AuthModal';
+import { useAppContext } from '../Context';
 
 function SignInPage() {
-  const { authModalOpen, openAuthModal, closeAuthModal } = useAppContext();
-  // Ensure modal is open in login mode
-  if (!authModalOpen) openAuthModal('login');
+  const { closeAuthModal } = useAppContext();
+  const navigate = useNavigate();
   return (
-    <div className="min-h-screen bg-black text-white flex items-center justify-center">
-      {/* The modal will appear automatically */}
-      <AuthModal isOpen={true} onClose={closeAuthModal} defaultMode="login" />
-    </div>
+    <AuthModal
+      isOpen={true}
+      onClose={() => {
+        closeAuthModal();
+        navigate('/');
+      }}
+      defaultMode="login"
+      isStandalone={true}
+    />
   );
 }
 

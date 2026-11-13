@@ -32,7 +32,7 @@ function Navbar() {
           </Link>
 
           {/* Desktop navigation */}
-          <nav className="hidden md:flex items-center space-x-1 p-1 rounded-full bg-white/5 border border-white/5 backdrop-blur-md">
+          <nav className="hidden md:flex items-center space-x-1 p-1 rounded-full  border border-white/5 backdrop-blur-md">
             <Link
               to="/"
               className={`px-4 py-1.5 rounded-full text-xs font-medium transition-all ${
@@ -75,12 +75,12 @@ function Navbar() {
                 >
                   Sign In
                 </button>
-                <button
+                {/* <button
                   onClick={() => openAuthModal('register')}
                   className="px-4 py-1.5 text-xs font-medium text-white rounded-full bg-linear-to-r from-blue-600 to-purple-600 hover:from-blue-500 hover:to-purple-500 transition-all shadow-md shadow-blue-500/20 hover:scale-[1.02] cursor-pointer"
                 >
                   Sign Up
-                </button>
+                </button> */}
               </div>
             )}
           </div>
@@ -139,7 +139,7 @@ function Navbar() {
                   >
                     Sign In
                   </button>
-                  <button
+                  {/* <button
                     onClick={() => {
                       openAuthModal('register');
                       setMobileMenuOpen(false);
@@ -147,7 +147,7 @@ function Navbar() {
                     className="w-full text-center px-4 py-2 rounded-lg bg-linear-to-r from-blue-600 to-purple-600 text-xs font-medium text-white shadow-md hover:from-blue-500 hover:to-purple-500"
                   >
                     Sign Up
-                  </button>
+                  </button> */}
                 </>
               )}
             </div>

@@ -1,15 +1,20 @@
-import { useAppContext } from '../Context';
+import { useNavigate } from 'react-router-dom';
 import AuthModal from '../components/AuthModal';
+import { useAppContext } from '../Context';
 
 function SignUpPage() {
-  const { authModalOpen, openAuthModal, closeAuthModal } = useAppContext();
-  // Ensure modal is open in register mode
-  if (!authModalOpen) openAuthModal('register');
+  const { closeAuthModal } = useAppContext();
+  const navigate = useNavigate();
   return (
-    <div className="min-h-screen bg-black text-white flex items-center justify-center">
-      {/* The modal will appear automatically */}
-      <AuthModal isOpen={true} onClose={closeAuthModal} defaultMode="register" />
-    </div>
+    <AuthModal
+      isOpen={true}
+      onClose={() => {
+        closeAuthModal();
+        navigate('/');
+      }}
+      defaultMode="register"
+      isStandalone={true}
+    />
   );
 }
 
