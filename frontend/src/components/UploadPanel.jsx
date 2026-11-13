@@ -285,6 +285,32 @@ export function UploadPanel({ selectedUpload, onSelect, themeConfig, spaceName, 
           themeConfig={themeConfig}
         />
       )}
+
+      {/* Storage Quota Footer (for signed-in users) */}
+      {user && (
+        <div 
+          className="shrink-0 px-3 py-2 border-t text-[11px] select-none"
+          style={{ borderColor: ui.border, backgroundColor: ui.sidebarBg }}
+        >
+          <div className="flex items-center justify-between text-[10px] opacity-70 mb-1">
+            <span>Storage Usage</span>
+            <span>{fmtBytes(user.storageUsedBytes || 0)} / 200 MB</span>
+          </div>
+          <div className="w-full h-1.5 rounded-full bg-white/10 overflow-hidden">
+            <div 
+              className="h-full rounded-full transition-all duration-300"
+              style={{ 
+                width: `${Math.max(1, Math.min(100, ((user.storageUsedBytes || 0) / (200 * 1024 * 1024)) * 100))}%`,
+                backgroundColor: ((user.storageUsedBytes || 0) / (200 * 1024 * 1024)) > 0.9 
+                  ? '#ef4444' 
+                  : ((user.storageUsedBytes || 0) / (200 * 1024 * 1024)) > 0.7 
+                    ? '#eab308' 
+                    : '#3b82f6'
+              }}
+            />
+          </div>
+        </div>
+      )}
     </div>
   );
 }
