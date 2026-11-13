@@ -32,11 +32,13 @@ function TabBar({
       {/* Open File Tabs */}
       <div className="flex h-full overflow-x-auto scrollbar-none">
         {openFiles.map((file) => {
-          const isActive = activeFile?.name === file.name;
+          const fileKey = file.path ? `${file.path}/${file.name}` : file.name;
+          const isActive = activeFile && (activeFile.name === file.name && (activeFile.path || '') === (file.path || ''));
           return (
             <div
-              key={file.name}
+              key={fileKey}
               onClick={() => onTabClick(file)}
+              title={fileKey}
               className="group flex items-center h-full px-3 space-x-2 border-r cursor-pointer transition-colors relative"
               style={{
                 backgroundColor: isActive ? ui.tabActiveBg : ui.tabInactiveBg,
@@ -50,7 +52,7 @@ function TabBar({
               <button
                 onClick={(e) => {
                   e.stopPropagation();
-                  onTabClose(file.name);
+                  onTabClose(file);
                 }}
                 className={`p-0.5 rounded cursor-pointer opacity-0 group-hover:opacity-100 hover:opacity-80 transition-opacity ${
                   isActive ? '!opacity-100' : ''

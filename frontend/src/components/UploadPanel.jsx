@@ -2,7 +2,7 @@ import React, { useState, useRef, useEffect, useCallback } from 'react';
 import axios from 'axios';
 import {
   VscChevronDown, VscChevronRight, VscTrash, VscCloudUpload, VscFile,
-  VscShare, VscCopy, VscCheck, VscLoading
+  VscShare, VscCopy, VscCheck, VscLoading, VscRefresh
 } from 'react-icons/vsc';
 import { useAppContext } from '../Context';
 import FileShareModal from './FileShareModal';
@@ -145,24 +145,35 @@ export function UploadPanel({ selectedUpload, onSelect, themeConfig, spaceName, 
         style={{ color: ui.sidebarHeaderFg }}
       >
         <span>Uploads</span>
-        <button
-          onClick={() => {
-            if (!user) {
-              openAuthModal('login');
-            } else {
-              uploadRef.current?.click();
+        <div className="flex items-center space-x-1">
+          <button
+            onClick={() => fetchUploads()}
+            title="Refresh Uploads"
+            disabled={loading}
+            className="p-1 rounded hover:opacity-80 cursor-pointer disabled:opacity-40 transition-opacity"
+            style={{ color: ui.sidebarFg }}
+          >
+            <VscRefresh className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} />
+          </button>
+          <button
+            onClick={() => {
+              if (!user) {
+                openAuthModal('login');
+              } else {
+                uploadRef.current?.click();
+              }
+            }}
+            title={user ? 'Upload Files' : 'Sign in to upload'}
+            disabled={uploading}
+            className="p-1 rounded hover:opacity-80 cursor-pointer disabled:opacity-40 transition-opacity"
+            style={{ color: ui.sidebarFg }}
+          >
+            {uploading
+              ? <VscLoading className="w-4 h-4 animate-spin" />
+              : <VscCloudUpload className="w-4 h-4" />
             }
-          }}
-          title={user ? 'Upload Files' : 'Sign in to upload'}
-          disabled={uploading}
-          className="p-1 rounded hover:opacity-80 cursor-pointer disabled:opacity-40 transition-opacity"
-          style={{ color: ui.sidebarFg }}
-        >
-          {uploading
-            ? <VscLoading className="w-4 h-4 animate-spin" />
-            : <VscCloudUpload className="w-4 h-4" />
-          }
-        </button>
+          </button>
+        </div>
         <input ref={uploadRef} type="file" multiple className="hidden" onChange={handleInputChange} />
       </div>
 

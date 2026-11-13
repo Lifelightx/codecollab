@@ -13,9 +13,9 @@ const initializeSocket = (io) => {
         });
 
         // Listen for code changes from a client
-        socket.on('code-change', async ({ spaceName, file, content }) => {
+        socket.on('code-change', async ({ spaceName, file, path, content }) => {
             const normalized = spaceName.toLowerCase();
-            socket.to(normalized).emit('code-updated', { file, content });
+            socket.to(normalized).emit('code-updated', { file, path: path || '', content });
 
             try {
                 const space = await Codespace.findOne({ name: normalized });
@@ -31,6 +31,14 @@ const initializeSocket = (io) => {
                         });
                         return;
                     }
+                }
+
+                if (path !== undefined) {
+                    const updateRes = await Codespace.updateOne(
+                        { name: normalized, files: { $elemMatch: { name: file, path: path || '' } } },
+                        { $set: { 'files.$.content': content } }
+                    );
+                    if (updateRes.matchedCount > 0) return;
                 }
 
                 await Codespace.updateOne(
@@ -88,17 +96,45 @@ const initializeSocket = (io) => {
         });
 
         // Listen for file/folder deletion
-        socket.on('delete-file', async ({ spaceName, fileName }) => {
+        socket.on('delete-file', async ({ spaceName, fileName, path, isFolder }) => {
             const normalized = spaceName.toLowerCase();
             try {
+                const space = await Codespace.findOne({ name: normalized });
+                if (!space) return;
+
+                const target = space.files.find(f => 
+                    f.name === fileName && (path === undefined || (f.path || '') === (path || ''))
+                );
+                const targetIsFolder = isFolder ?? target?.isFolder ?? false;
+                const targetPath = (target && target.path !== undefined) ? target.path : (path || '');
+
+                let pullCondition;
+                if (targetIsFolder) {
+                    const folderFullPath = targetPath ? `${targetPath}/${fileName}` : fileName;
+                    pullCondition = {
+                        $or: [
+                            { name: fileName, isFolder: true, path: targetPath },
+                            { path: folderFullPath },
+                            { path: new RegExp(`^${folderFullPath}/`) }
+                        ]
+                    };
+                } else {
+                    pullCondition = { name: fileName, path: targetPath };
+                }
+
                 const updatedCodespace = await Codespace.findOneAndUpdate(
                     { name: normalized },
-                    { $pull: { files: { name: fileName } } },
+                    { $pull: { files: pullCondition } },
                     { new: true }
                 );
 
                 if (updatedCodespace) {
-                    io.to(normalized).emit('file-deleted', { fileName, files: updatedCodespace.files });
+                    io.to(normalized).emit('file-deleted', { 
+                        fileName, 
+                        path: targetPath, 
+                        isFolder: targetIsFolder, 
+                        files: updatedCodespace.files 
+                    });
                 }
             } catch (err) {
                 console.error("Delete file error:", err);

@@ -188,24 +188,47 @@ module.exports = (io) => {
     });
 
     router.delete("/:name/delete", async (req, res) => {
-        const { file } = req.body;
+        const { file, path, isFolder } = req.body;
 
         try {
-            const codespace = await Codespace.findOneAndUpdate(
-                { name: req.params.name.toLowerCase() },
-                {
-                    $pull: {
-                        files: { name: file }
-                    }
-                },
-                { new: true }
-            );
-
-            if (!codespace) {
+            const spaceName = req.params.name.toLowerCase();
+            const space = await Codespace.findOne({ name: spaceName });
+            if (!space) {
                 return res.status(404).json({ msg: "Codespace not found." });
             }
 
-            io.to(req.params.name.toLowerCase()).emit('file-deleted', { fileName: file, files: codespace.files });
+            const target = space.files.find(f => 
+                f.name === file && (path === undefined || (f.path || '') === (path || ''))
+            );
+            const targetIsFolder = isFolder ?? target?.isFolder ?? false;
+            const targetPath = (target && target.path !== undefined) ? target.path : (path || '');
+
+            let pullCondition;
+            if (targetIsFolder) {
+                const folderFullPath = targetPath ? `${targetPath}/${file}` : file;
+                pullCondition = {
+                    $or: [
+                        { name: file, isFolder: true, path: targetPath },
+                        { path: folderFullPath },
+                        { path: new RegExp(`^${folderFullPath}/`) }
+                    ]
+                };
+            } else {
+                pullCondition = { name: file, path: targetPath };
+            }
+
+            const codespace = await Codespace.findOneAndUpdate(
+                { name: spaceName },
+                { $pull: { files: pullCondition } },
+                { new: true }
+            );
+
+            io.to(spaceName).emit('file-deleted', { 
+                fileName: file, 
+                path: targetPath, 
+                isFolder: targetIsFolder, 
+                files: codespace.files 
+            });
 
             return res.json({
                 msg: `File '${file}' deleted successfully`,

@@ -196,6 +196,11 @@ function CodeSpacePage() {
     };
   }, [spaceName]);
 
+  const isSameFile = (a, b) => {
+    if (!a || !b) return false;
+    return a.name === b.name && ((a.path || '').replace(/^\/+|\/+$/g, '') === (b.path || '').replace(/^\/+|\/+$/g, ''));
+  };
+
   const initializeSocketListeners = (socket) => {
     socket.on('file-created', (newFileList) => {
       if (Array.isArray(newFileList)) {
@@ -203,7 +208,7 @@ function CodeSpacePage() {
         const newlyCreated = newFileList[newFileList.length - 1];
         if (newlyCreated && !newlyCreated.isFolder) {
           setOpenFiles((prev) => {
-            if (!prev.some((f) => f.name === newlyCreated.name)) {
+            if (!prev.some((f) => isSameFile(f, newlyCreated))) {
               return [...prev, newlyCreated];
             }
             return prev;
@@ -213,26 +218,48 @@ function CodeSpacePage() {
       }
     });
 
-    socket.on('code-updated', ({ file, content }) => {
+    socket.on('code-updated', ({ file, path, content }) => {
+      const match = (f) => f.name === file && (path === undefined || (f.path || '').replace(/^\/+|\/+$/g, '') === (path || '').replace(/^\/+|\/+$/g, ''));
       setFiles((prev) =>
-        prev.map((f) => (f.name === file ? { ...f, content } : f))
+        prev.map((f) => (match(f) ? { ...f, content } : f))
       );
       setOpenFiles((prev) =>
-        prev.map((f) => (f.name === file ? { ...f, content } : f))
+        prev.map((f) => (match(f) ? { ...f, content } : f))
       );
       setActiveFile((prev) =>
-        prev?.name === file ? { ...prev, content } : prev
+        prev && match(prev) ? { ...prev, content } : prev
       );
     });
 
-    socket.on('file-deleted', ({ fileName, files: updatedFiles }) => {
+    socket.on('file-deleted', ({ fileName, path = '', isFolder, files: updatedFiles }) => {
       if (updatedFiles) {
         setFiles(updatedFiles);
       } else {
-        setFiles((prev) => prev.filter((f) => f.name !== fileName));
+        const normPath = (path || '').replace(/^\/+|\/+$/g, '');
+        const fullDeletedPath = normPath ? `${normPath}/${fileName}` : fileName;
+        setFiles((prev) => prev.filter((f) => {
+          const fPath = (f.path || '').replace(/^\/+|\/+$/g, '');
+          if (isFolder) {
+            return !(f.name === fileName && f.isFolder && fPath === normPath) &&
+                   fPath !== fullDeletedPath &&
+                   !fPath.startsWith(fullDeletedPath + '/');
+          }
+          return !(fPath === normPath && f.name === fileName);
+        }));
       }
-      setOpenFiles((prev) => prev.filter((f) => f.name !== fileName));
-      setActiveFile((prev) => (prev?.name === fileName ? null : prev));
+
+      const normPath = (path || '').replace(/^\/+|\/+$/g, '');
+      const fullDeletedPath = normPath ? `${normPath}/${fileName}` : fileName;
+      const isTarget = (f) => {
+        const fPath = (f.path || '').replace(/^\/+|\/+$/g, '');
+        if (isFolder) {
+          return fPath === fullDeletedPath || fPath.startsWith(fullDeletedPath + '/');
+        }
+        return fPath === normPath && f.name === fileName;
+      };
+
+      setOpenFiles((prev) => prev.filter((f) => !isTarget(f)));
+      setActiveFile((prev) => (prev && isTarget(prev) ? null : prev));
     });
 
     socket.on('privacy-updated', (data) => {
@@ -251,7 +278,7 @@ function CodeSpacePage() {
 
   const handleFileSelect = (file) => {
     if (file.isFolder) return;
-    if (!openFiles.some((f) => f.name === file.name)) {
+    if (!openFiles.some((f) => isSameFile(f, file))) {
       setOpenFiles((prev) => [...prev, file]);
     }
     setActiveFile(file);
@@ -263,27 +290,47 @@ function CodeSpacePage() {
     setSelectedUpload(null);
   };
 
-  const handleTabClose = (fileName) => {
-    const updated = openFiles.filter((f) => f.name !== fileName);
+  const handleTabClose = (fileToClose) => {
+    const match = (f) => typeof fileToClose === 'string'
+      ? f.name === fileToClose
+      : isSameFile(f, fileToClose);
+
+    const updated = openFiles.filter((f) => !match(f));
     setOpenFiles(updated);
-    if (activeFile?.name === fileName) {
+    if (activeFile && match(activeFile)) {
       setActiveFile(updated.length > 0 ? updated[updated.length - 1] : null);
     }
   };
 
-  const handleDelete = (fileName) => {
-    socketRef.current?.emit('delete-file', { spaceName, fileName });
+  const handleDelete = (item) => {
+    const fileName = typeof item === 'string' ? item : item.name;
+    const path = typeof item === 'object' ? (item.path || '') : '';
+    const isFolder = typeof item === 'object' ? !!item.isFolder : false;
+    socketRef.current?.emit('delete-file', { spaceName, fileName, path, isFolder });
   };
 
-  const handleCreateFile = (fileName) => {
-    let finalFileName = fileName.trim();
+  const handleCreateFile = (fileName, folderPath = '') => {
+    let raw = fileName.trim();
+    if (!raw) return;
+
+    let targetPath = (folderPath || '').replace(/^\/+|\/+$/g, '');
+    if (raw.includes('/')) {
+      const parts = raw.split('/').filter(Boolean);
+      raw = parts.pop();
+      const sub = parts.join('/');
+      targetPath = targetPath ? `${targetPath}/${sub}` : sub;
+    }
+
+    let finalFileName = raw;
     if (!finalFileName.includes('.') && finalFileName.toLowerCase() !== 'dockerfile') {
       finalFileName += '.txt';
     }
-    if (files.some((f) => f.name.toLowerCase() === finalFileName.toLowerCase())) {
-      alert('A file with this name already exists.');
+
+    if (files.some((f) => (f.path || '').replace(/^\/+|\/+$/g, '') === targetPath && f.name.toLowerCase() === finalFileName.toLowerCase())) {
+      alert('A file with this name already exists in this location.');
       return;
     }
+
     const language = finalFileName.toLowerCase() === 'dockerfile' 
       ? 'dockerfile' 
       : (finalFileName.split('.').pop() || 'plaintext');
@@ -293,23 +340,36 @@ function CodeSpacePage() {
       fileName: finalFileName,
       language,
       isFolder: false,
+      path: targetPath,
     });
   };
 
-  const handleCreateFolder = (folderName) => {
+  const handleCreateFolder = (folderName, folderPath = '') => {
     if (!user) {
       openAuthModal('register');
       return;
     }
-    const cleanName = folderName.trim();
-    if (files.some((f) => f.name.toLowerCase() === cleanName.toLowerCase())) {
-      alert('A file or folder with this name already exists.');
+    let raw = folderName.trim().replace(/^\/+|\/+$/g, '');
+    if (!raw) return;
+
+    let targetPath = (folderPath || '').replace(/^\/+|\/+$/g, '');
+    if (raw.includes('/')) {
+      const parts = raw.split('/').filter(Boolean);
+      raw = parts.pop();
+      const sub = parts.join('/');
+      targetPath = targetPath ? `${targetPath}/${sub}` : sub;
+    }
+
+    if (files.some((f) => (f.path || '').replace(/^\/+|\/+$/g, '') === targetPath && f.name.toLowerCase() === raw.toLowerCase())) {
+      alert('A file or folder with this name already exists in this location.');
       return;
     }
+
     socketRef.current?.emit('create-file', {
       spaceName,
-      fileName: cleanName,
+      fileName: raw,
       isFolder: true,
+      path: targetPath,
     });
   };
 
@@ -319,6 +379,7 @@ function CodeSpacePage() {
     socketRef.current?.emit('code-change', {
       spaceName,
       file: activeFile.name,
+      path: activeFile.path || '',
       content: newCode,
     });
   };
@@ -516,6 +577,7 @@ function CodeSpacePage() {
                     onDeleteFile={handleDelete}
                     onCreateFile={handleCreateFile}
                     onCreateFolder={handleCreateFolder}
+                    onRefresh={() => fetchCodeSpaceData(null)}
                     themeConfig={themeConfig}
                     isOwner={!!user}
                   />
@@ -566,7 +628,7 @@ function CodeSpacePage() {
                 <UploadPreview file={selectedUpload} themeConfig={themeConfig} />
               ) : activeFile ? (
                 <Editor
-                  key={activeFile.name}
+                  key={activeFile.path ? `${activeFile.path}/${activeFile.name}` : activeFile.name}
                   fileName={activeFile.name}
                   language={activeFile.language}
                   value={activeFile.content}

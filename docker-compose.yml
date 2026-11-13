@@ -24,6 +24,8 @@ services:
     restart: unless-stopped
     environment:
       MONGO_URI: mongodb://mongo:27017/appdb
+    volumes:
+      - "/home/ubuntu/UPLOADS:/app/uploads:rw"
     networks:
       - app-network
     depends_on:
