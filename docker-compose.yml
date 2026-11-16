@@ -22,6 +22,8 @@ services:
     image: ${DOCKER_USERNAME}/codecollab-backend:${BACKEND_TAG:-latest}
     container_name: codecollab-backend
     restart: unless-stopped
+    env_file:
+      - .env
     environment:
       MONGO_URI: mongodb://mongo:27017/appdb
     volumes:

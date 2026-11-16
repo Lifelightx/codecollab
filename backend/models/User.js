@@ -20,6 +20,10 @@ const userSchema = new mongoose.Schema({
     required: true,
     minlength: 6,
   },
+  isVerified: {
+    type: Boolean,
+    default: true,
+  },
   // Storage tracked in bytes (max 200MB = 200 * 1024 * 1024 = 209,715,200)
   storageUsedBytes: {
     type: Number,

@@ -152,6 +152,7 @@ jobs:
           IMAGE_TAG: ${{ github.sha }}
           DOCKER_USERNAME: ${{ secrets.DOCKER_USERNAME }}
           TARGET_DIR: /home/ubuntu/codecollab
+          ENV_FILE: ${{ secrets.ENV_FILE || secrets.ENV || secrets.DOTENV || secrets.BACKEND_ENV }}
           DEPLOY_BACKEND: ${{ needs.detect-changes.outputs.backend }}
           DEPLOY_FRONTEND: ${{ needs.detect-changes.outputs.frontend }}
           DEPLOY_COMPOSE: ${{ needs.detect-changes.outputs.compose }}
@@ -178,13 +179,23 @@ jobs:
             "$SERVER_USER@$SERVER_HOST" \
             "mkdir -p $TARGET_DIR"
 
-          # 2. Transfer docker-compose.yml to target directory
+          # 2. Sync .env configuration from GitHub Secret to remote server
+          if [ -n "${ENV_FILE:-}" ]; then
+            echo "Syncing .env file to remote server..."
+            printf '%s\n' "$ENV_FILE" | ssh -i ~/.ssh/deploy_key \
+              -o StrictHostKeyChecking=yes \
+              -o IdentitiesOnly=yes \
+              "$SERVER_USER@$SERVER_HOST" \
+              "cat > $TARGET_DIR/.env && chmod 600 $TARGET_DIR/.env"
+          fi
+
+          # 3. Transfer docker-compose.yml to target directory
           scp -i ~/.ssh/deploy_key \
             -o StrictHostKeyChecking=yes \
             -o IdentitiesOnly=yes \
             docker-compose.yml "$SERVER_USER@$SERVER_HOST:$TARGET_DIR/docker-compose.yml"
 
-          # 3. Transfer nginx configuration if updated
+          # 4. Transfer nginx configuration if updated
           if [ "$DEPLOY_NGINX" = "true" ]; then
             echo "Nginx configuration changed, syncing /home/ubuntu/nginx/nginx.conf..."
             scp -i ~/.ssh/deploy_key \
@@ -193,7 +204,7 @@ jobs:
               nginx/nginx.conf "$SERVER_USER@$SERVER_HOST:/home/ubuntu/nginx/nginx.conf"
           fi
 
-          # 4. Determine services to pull and recreate
+          # 5. Determine services to pull and recreate
           SERVICES_TO_DEPLOY=""
           if [ "$DEPLOY_BACKEND" = "true" ]; then
             SERVICES_TO_DEPLOY="$SERVICES_TO_DEPLOY backend"
@@ -208,6 +219,10 @@ jobs:
           # If only docker-compose.yml changed, redeploy all defined services
           if [ -z "$SERVICES_TO_DEPLOY" ] && [ "$DEPLOY_COMPOSE" = "true" ]; then
             SERVICES_TO_DEPLOY="backend frontend proxy mongo"
+          fi
+
+          if [ -z "$SERVICES_TO_DEPLOY" ]; then
+            SERVICES_TO_DEPLOY="backend"
           fi
 
           echo "Target services to update: $SERVICES_TO_DEPLOY"
