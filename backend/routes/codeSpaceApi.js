@@ -1,6 +1,7 @@
 const express = require('express');
 const Codespace = require('../models/codeSpace');
 const User = require('../models/User');
+const logger = require('../utils/logger');
 const { optionalAuth, requireAuth } = require('../middleware/auth');
 
 module.exports = (io) => {
@@ -36,6 +37,7 @@ module.exports = (io) => {
                         await codespace.save();
                     }
                 }
+                logger.info(`Codespace accessed: '${sanitizedName}' [Owner: ${codespace.ownerId ? codespace.ownerId : 'Guest'}]`, null, 'CODESPACE');
                 return res.json(codespace);
             } else {
                 const isAuth = !!req.user;
@@ -52,10 +54,11 @@ module.exports = (io) => {
                     }]
                 });
                 await newCodespace.save();
+                logger.info(`New Codespace created: '${sanitizedName}' [Auth: ${isAuth}]`, null, 'CODESPACE');
                 return res.status(201).json(newCodespace);
             }
         } catch (error) {
-            console.error('Create space error:', error);
+            logger.error(`Create space error for '${req.body?.name}': ${error.message}`, error, 'CODESPACE');
             res.status(500).json({ msg: 'Server error', error });
         }
     });
@@ -108,11 +111,14 @@ module.exports = (io) => {
                 return res.status(404).json({ msg: 'Codespace not found' });
             }
 
+            logger.info(`Privacy updated for '${name}': isPublic=${updatedCodespace.isPublic}, hasPasscode=${!!updatedCodespace.passcode}`, null, 'CODESPACE');
+
             res.json({
                 isPublic: updatedCodespace.isPublic,
                 hasPasscode: !!updatedCodespace.passcode,
             });
         } catch (error) {
+            logger.error(`Update privacy error for '${req.params.name}': ${error.message}`, error, 'CODESPACE');
             res.status(500).json({ msg: 'Server error', error });
         }
     });
@@ -139,9 +145,11 @@ module.exports = (io) => {
             codespace.customSlug = slug.toLowerCase();
             await codespace.save();
 
+            logger.info(`Custom slug updated for '${spaceName}' -> '${codespace.customSlug}'`, null, 'CODESPACE');
+
             res.json({ message: 'Custom URL updated successfully', customSlug: codespace.customSlug });
         } catch (err) {
-            console.error('Custom slug error:', err);
+            logger.error(`Custom slug error for '${req.params.name}': ${err.message}`, err, 'CODESPACE');
             res.status(500).json({ message: 'Failed to set custom URL' });
         }
     });
@@ -230,12 +238,15 @@ module.exports = (io) => {
                 files: codespace.files 
             });
 
+            logger.info(`Deleted ${targetIsFolder ? 'folder' : 'file'} '${file}' from codespace '${spaceName}'`, null, 'CODESPACE');
+
             return res.json({
                 msg: `File '${file}' deleted successfully`,
                 codespace
             });
 
         } catch (err) {
+            logger.error(`Delete file error in codespace '${req.params.name}' for '${req.body?.file}': ${err.message}`, err, 'CODESPACE');
             res.status(500).json({ message: err.message });
         }
     });

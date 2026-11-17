@@ -1,4 +1,5 @@
 const nodemailer = require('nodemailer');
+const logger = require('./logger');
 
 const createTransporter = () => {
   const user = process.env.SMTP_USER || process.env.EMAIL_USER;
@@ -39,6 +40,7 @@ const sendOtpEmail = async (email, otp, username = 'Developer') => {
   const transporter = createTransporter();
 
   if (!transporter) {
+    logger.warn(`SMTP credentials not configured. Running in simulation mode for recipient: '${email}'`, null, 'MAILER');
     console.log(`
 ┌──────────────────────────────────────────────────────────┐
 │  [CodeCollab OTP Service - Simulation Mode]              │
@@ -130,7 +132,7 @@ const sendOtpEmail = async (email, otp, username = 'Developer') => {
     html,
   });
 
-  console.log(`[CodeCollab OTP Service] Email sent successfully to ${email}. MessageId: ${info.messageId}`);
+  logger.info(`Verification email sent successfully to '${email}'. MessageId: ${info.messageId}`, null, 'MAILER');
   return { success: true, messageId: info.messageId };
 };
 

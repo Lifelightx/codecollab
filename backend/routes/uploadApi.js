@@ -6,6 +6,7 @@ const express = require('express');
 const Upload = require('../models/Upload');
 const User = require('../models/User');
 const Codespace = require('../models/codeSpace');
+const logger = require('../utils/logger');
 const { optionalAuth, requireAuth } = require('../middleware/auth');
 
 const router = express.Router();
@@ -60,12 +61,15 @@ router.post(
     upload.array('files', 20)(req, res, (err) => {
       if (err instanceof multer.MulterError) {
         if (err.code === 'LIMIT_FILE_SIZE') {
+          logger.warn(`Upload rejected: file size exceeds ${MAX_FILE_BYTES / (1024 * 1024)}MB`, null, 'UPLOAD');
           return res.status(413).json({
             message: `File exceeds maximum allowed size (${MAX_FILE_BYTES / (1024 * 1024)} MB).`,
           });
         }
+        logger.warn(`Multer error during upload: ${err.message}`, null, 'UPLOAD');
         return res.status(400).json({ message: `Upload error: ${err.message}` });
       } else if (err) {
+        logger.error(`Upload error: ${err.message}`, err, 'UPLOAD');
         return res.status(500).json({ message: err.message || 'File upload failed.' });
       }
       next();
@@ -108,6 +112,7 @@ router.post(
 
       if (usedBytes + incomingBytes > QUOTA_BYTES) {
         req.files.forEach(f => fs.unlink(f.path, () => {}));
+        logger.warn(`Upload blocked: user ${userId} exceeded quota (${(usedBytes + incomingBytes) / (1024 * 1024)}MB / ${QUOTA_BYTES / (1024 * 1024)}MB)`, null, 'UPLOAD');
         return res.status(413).json({
           message: `Upload would exceed your storage quota (${QUOTA_BYTES / (1024 * 1024)} MB).`,
         });
@@ -128,13 +133,15 @@ router.post(
       const saved = await Upload.insertMany(docs);
       const updatedStorageUsed = await syncUserStorage(userId);
 
+      logger.info(`User ${userId} uploaded ${saved.length} file(s) (${(incomingBytes / (1024 * 1024)).toFixed(2)} MB) to space '${spaceName}'`, null, 'UPLOAD');
+
       return res.status(201).json({
         uploads: saved,
         storageUsedBytes: updatedStorageUsed,
       });
 
     } catch (err) {
-      console.error('Upload error:', err);
+      logger.error(`Upload error: ${err.message}`, err, 'UPLOAD');
       req.files.forEach(f => fs.unlink(f.path, () => {}));
       return res.status(500).json({ message: 'Server error during upload.' });
     }
@@ -198,13 +205,15 @@ router.delete('/clear-all', requireAuth, async (req, res) => {
     await Upload.deleteMany(filter);
     const updatedStorageUsed = await syncUserStorage(userId);
 
+    logger.info(`User ${userId} cleared all ${docs.length} upload(s) from space '${spaceName || 'all'}'`, null, 'UPLOAD');
+
     return res.json({
       message: 'All files cleared.',
       storageUsedBytes: updatedStorageUsed,
       count: docs.length,
     });
   } catch (err) {
-    console.error('Clear-all error:', err);
+    logger.error(`Clear-all error: ${err.message}`, err, 'UPLOAD');
     return res.status(500).json({ message: 'Failed to clear all files.' });
   }
 });
@@ -226,9 +235,11 @@ router.delete('/:id', requireAuth, async (req, res) => {
     await doc.deleteOne();
 
     const updatedStorageUsed = await syncUserStorage(userId);
+    logger.info(`User ${userId} deleted file '${doc.originalName}' (${doc._id})`, null, 'UPLOAD');
 
     return res.json({ message: 'Deleted.', storageUsedBytes: updatedStorageUsed });
   } catch (err) {
+    logger.error(`Delete upload error for ${req.params.id}: ${err.message}`, err, 'UPLOAD');
     return res.status(500).json({ message: 'Failed to delete upload.' });
   }
 });
