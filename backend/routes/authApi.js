@@ -3,6 +3,7 @@ const jwt = require('jsonwebtoken');
 const User = require('../models/User');
 const Otp = require('../models/Otp');
 const logger = require('../utils/logger');
+const { authEventsTotal } = require('../utils/metrics');
 const { sendOtpEmail } = require('../utils/mailer');
 const { requireAuth, JWT_SECRET } = require('../middleware/auth');
 
@@ -67,6 +68,7 @@ router.post('/send-otp', async (req, res) => {
     );
 
     const emailRes = await sendOtpEmail(cleanEmail, otp, cleanUsername);
+    authEventsTotal.inc({ action: 'otp_sent', status: 'success' });
     logger.info(`Generated and sent OTP to '${cleanEmail}' (Username: '${cleanUsername}')`, null, 'AUTH');
 
     res.json({
@@ -144,6 +146,7 @@ router.post('/verify-otp', async (req, res) => {
     }
 
     if (pending.otp !== cleanOtp) {
+      authEventsTotal.inc({ action: 'otp_verify', status: 'failure' });
       logger.warn(`Verify OTP failed: incorrect OTP entered for '${cleanEmail}'`, null, 'AUTH');
       return res.status(400).json({ message: 'Invalid 6-digit verification code. Please try again.' });
     }
@@ -177,6 +180,7 @@ router.post('/verify-otp', async (req, res) => {
       maxAge: 30 * 24 * 60 * 60 * 1000,
     });
 
+    authEventsTotal.inc({ action: 'otp_verify', status: 'success' });
     logger.info(`User successfully verified and created: '${user.username}' [Email: '${user.email}']`, null, 'AUTH');
 
     res.status(201).json({
@@ -318,17 +322,20 @@ router.post('/login', async (req, res) => {
     });
 
     if (!user) {
+      authEventsTotal.inc({ action: 'login', status: 'failure' });
       logger.warn(`Failed login attempt: account not found for '${identifier}'`, null, 'AUTH');
       return res.status(401).json({ message: 'Invalid credentials.' });
     }
 
     const isMatch = await user.comparePassword(password);
     if (!isMatch) {
+      authEventsTotal.inc({ action: 'login', status: 'failure' });
       logger.warn(`Failed login attempt: wrong password for user '${user.username}'`, null, 'AUTH');
       return res.status(401).json({ message: 'Invalid credentials.' });
     }
 
     if (user.isVerified === false) {
+      authEventsTotal.inc({ action: 'login', status: 'failure' });
       logger.warn(`Login rejected: user '${user.username}' is not verified`, null, 'AUTH');
       return res.status(403).json({
         message: 'Your email address is not verified. Please verify your email before signing in.',
@@ -346,6 +353,7 @@ router.post('/login', async (req, res) => {
       maxAge: 30 * 24 * 60 * 60 * 1000,
     });
 
+    authEventsTotal.inc({ action: 'login', status: 'success' });
     logger.info(`User logged in: '${user.username}' [Email: '${user.email}']`, null, 'AUTH');
 
     res.json({
@@ -382,6 +390,7 @@ router.get('/me', requireAuth, async (req, res) => {
 // POST /api/auth/logout
 router.post('/logout', (req, res) => {
   res.clearCookie('token');
+  authEventsTotal.inc({ action: 'logout', status: 'success' });
   logger.info(`User logged out`, null, 'AUTH');
   res.json({ message: 'Signed out successfully' });
 });

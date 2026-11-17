@@ -7,6 +7,7 @@ const Upload = require('../models/Upload');
 const User = require('../models/User');
 const Codespace = require('../models/codeSpace');
 const logger = require('../utils/logger');
+const { uploadCountTotal, uploadBytesTotal } = require('../utils/metrics');
 const { optionalAuth, requireAuth } = require('../middleware/auth');
 
 const router = express.Router();
@@ -132,6 +133,9 @@ router.post(
 
       const saved = await Upload.insertMany(docs);
       const updatedStorageUsed = await syncUserStorage(userId);
+
+      uploadCountTotal.inc(saved.length);
+      uploadBytesTotal.inc(incomingBytes);
 
       logger.info(`User ${userId} uploaded ${saved.length} file(s) (${(incomingBytes / (1024 * 1024)).toFixed(2)} MB) to space '${spaceName}'`, null, 'UPLOAD');
 

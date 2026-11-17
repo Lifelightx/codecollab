@@ -1,19 +1,23 @@
 const Codespace = require('../models/codeSpace');
 const User = require('../models/User');
 const logger = require('../utils/logger');
+const { websocketConnectedClients, websocketEventsCounter } = require('../utils/metrics');
 
 const GUEST_MAX_BYTES = 2 * 1024 * 1024; // 2MB limit for guest spaces
 const USER_MAX_BYTES = 200 * 1024 * 1024; // 200MB limit for signed-in user
 
 const initializeSocket = (io) => {
     io.on('connection', (socket) => {
+        websocketConnectedClients.inc();
         logger.info(`Client connected: ${socket.id} [IP: ${socket.handshake.address || 'unknown'}]`, null, 'SOCKET');
 
         socket.on('disconnect', (reason) => {
+            websocketConnectedClients.dec();
             logger.info(`Client disconnected: ${socket.id} (Reason: ${reason})`, null, 'SOCKET');
         });
 
         socket.on('join-space', async ({ spaceName }) => {
+            websocketEventsCounter.inc({ event: 'join-space' });
             if (!spaceName) return;
             const normalized = spaceName.toLowerCase();
             socket.join(normalized);
@@ -23,6 +27,7 @@ const initializeSocket = (io) => {
 
         // Listen for code changes from a client
         socket.on('code-change', async ({ spaceName, file, path, content }) => {
+            websocketEventsCounter.inc({ event: 'code-change' });
             if (!spaceName || !file) return;
             const normalized = spaceName.toLowerCase();
             socket.to(normalized).emit('code-updated', { file, path: path || '', content });
@@ -66,6 +71,7 @@ const initializeSocket = (io) => {
 
         // Listen for new file creation
         socket.on('create-file', async ({ spaceName, fileName, language, isFolder, path }) => {
+            websocketEventsCounter.inc({ event: 'create-file' });
             if (!spaceName || !fileName) return;
             const normalized = spaceName.toLowerCase();
             try {
@@ -122,6 +128,7 @@ const initializeSocket = (io) => {
 
         // Listen for file/folder deletion
         socket.on('delete-file', async ({ spaceName, fileName, path, isFolder }) => {
+            websocketEventsCounter.inc({ event: 'delete-file' });
             if (!spaceName || !fileName) return;
             const normalized = spaceName.toLowerCase();
             try {
@@ -176,6 +183,7 @@ const initializeSocket = (io) => {
         });
 
         socket.on('privacy-change', ({ spaceName, isPublic, hasPasscode }) => {
+            websocketEventsCounter.inc({ event: 'privacy-change' });
             if (!spaceName) return;
             const normalized = spaceName.toLowerCase();
             logger.info(`Privacy updated in '${normalized}': isPublic=${isPublic}, hasPasscode=${!!hasPasscode}`, null, 'SOCKET');

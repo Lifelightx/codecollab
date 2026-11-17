@@ -1,4 +1,5 @@
 const logger = require('../utils/logger');
+const { httpRequestCounter, httpRequestDuration } = require('../utils/metrics');
 
 function formatBytes(bytes) {
   if (!bytes || isNaN(bytes) || bytes === 0) return '0 B';
@@ -15,19 +16,47 @@ function getClientIp(req) {
   return req.headers['x-real-ip'] || req.socket?.remoteAddress || 'unknown';
 }
 
+function getNormalizedRoute(req) {
+  if (req.route?.path) {
+    return `${req.baseUrl || ''}${req.route.path}`;
+  }
+  const rawPath = (req.originalUrl || req.url || '').split('?')[0];
+  // Normalize dynamic IDs (UUIDs and MongoDB ObjectIDs) to prevent Prometheus metric explosion
+  return rawPath
+    .replace(/[0-9a-fA-F]{24}/g, ':id')
+    .replace(/[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}/g, ':uuid');
+}
+
 const requestLogger = (req, res, next) => {
   const start = process.hrtime();
 
   // Listen for response completion
   res.on('finish', () => {
     const diff = process.hrtime(start);
-    const durationMs = ((diff[0] * 1e9 + diff[1]) / 1e6).toFixed(1);
+    const durationSeconds = (diff[0] * 1e9 + diff[1]) / 1e9;
+    const durationMs = (durationSeconds * 1000).toFixed(1);
     const status = res.statusCode;
     const ip = getClientIp(req);
     const contentLength = res.getHeader('content-length');
     const sizeStr = formatBytes(contentLength ? parseInt(contentLength, 10) : 0);
     const userStr = req.user ? ` (User: ${req.user.username || req.user.email})` : '';
 
+    const route = getNormalizedRoute(req);
+
+    // 1. Record Prometheus Metrics
+    try {
+      const labels = {
+        method: req.method,
+        route,
+        status_code: String(status),
+      };
+      httpRequestCounter.inc(labels);
+      httpRequestDuration.observe(labels, durationSeconds);
+    } catch (_) {
+      // Don't let metrics collection disrupt logging
+    }
+
+    // 2. Structured Console / File Logging
     const message = `${req.method.padEnd(6)} ${req.originalUrl || req.url} ${status} ${durationMs}ms - ${sizeStr} [IP: ${ip}]${userStr}`;
 
     if (status >= 500) {

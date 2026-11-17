@@ -9,6 +9,7 @@ const cookieParser = require('cookie-parser');
 const { Server } = require('socket.io');
 
 const logger = require('./utils/logger');
+const { register } = require('./utils/metrics');
 const requestLogger = require('./middleware/requestLogger');
 const errorHandler = require('./middleware/errorHandler');
 
@@ -60,6 +61,45 @@ mongoose.connection.on('reconnected', () => {
 
 // Initialize Socket.io logic
 initializeSocket(io);
+
+// ── Instrumentation & Observability Endpoints ──
+// 1. Prometheus Metrics (for Grafana / Prometheus scraper)
+app.get('/metrics', async (req, res) => {
+  try {
+    res.setHeader('Content-Type', register.contentType);
+    res.send(await register.metrics());
+  } catch (err) {
+    logger.error(`Error generating Prometheus metrics: ${err.message}`, err, 'METRICS');
+    res.status(500).send(err.message);
+  }
+});
+
+// 2. Health & Readiness check (for Docker, Uptime monitors, Nginx)
+const healthHandler = (_req, res) => {
+  const isDbConnected = mongoose.connection.readyState === 1;
+  const memory = process.memoryUsage();
+
+  const healthData = {
+    status: isDbConnected ? 'UP' : 'DEGRADED',
+    timestamp: new Date().toISOString(),
+    uptimeSeconds: Math.floor(process.uptime()),
+    database: {
+      status: isDbConnected ? 'connected' : 'disconnected',
+      readyState: mongoose.connection.readyState,
+    },
+    system: {
+      heapUsedMB: +(memory.heapUsed / 1024 / 1024).toFixed(2),
+      heapTotalMB: +(memory.heapTotal / 1024 / 1024).toFixed(2),
+      rssMB: +(memory.rss / 1024 / 1024).toFixed(2),
+    },
+    nodeVersion: process.version,
+  };
+
+  res.status(isDbConnected ? 200 : 503).json(healthData);
+};
+
+app.get('/health', healthHandler);
+app.get('/api/health', healthHandler);
 
 // API Routes
 app.use('/api/auth', authRoutes);
