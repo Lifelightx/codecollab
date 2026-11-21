@@ -1,7 +1,7 @@
 import React, { useState, useRef, useEffect, useCallback } from 'react';
 import axios from 'axios';
 import {
-  VscChevronDown, VscChevronRight, VscTrash, VscCloudUpload, VscFile,
+  VscChevronDown, VscChevronRight, VscChevronLeft, VscTrash, VscCloudUpload, VscFile,
   VscShare, VscCopy, VscCheck, VscLoading, VscRefresh
 } from 'react-icons/vsc';
 import { useAppContext } from '../Context';
@@ -30,7 +30,7 @@ function fmtBytes(b) {
 }
 
 // ── UPLOAD PANEL (sidebar list) ─────────────────────────────────
-export function UploadPanel({ selectedUpload, onSelect, themeConfig, spaceName, defaultFileId }) {
+export function UploadPanel({ selectedUpload, onSelect, themeConfig, spaceName, defaultFileId, onCollapseSidebar }) {
   const { API_URL, updateUserStorage, user, openAuthModal } = useAppContext();
   const uploadRef = useRef(null);
   const [copied, setCopied]         = useState(false);
@@ -39,6 +39,7 @@ export function UploadPanel({ selectedUpload, onSelect, themeConfig, spaceName, 
   const [uploading, setUploading]   = useState(false);
   const [error, setError]           = useState('');
   const [shareModalOpen, setShareModalOpen] = useState(false);
+  const [isShareSectionOpen, setIsShareSectionOpen] = useState(true);
 
   const ui = themeConfig?.ui || {
     sidebarBg: '#252526', sidebarFg: '#cccccc', sidebarHeaderFg: '#bbbbbb',
@@ -173,6 +174,16 @@ export function UploadPanel({ selectedUpload, onSelect, themeConfig, spaceName, 
               : <VscCloudUpload className="w-4 h-4" />
             }
           </button>
+          {onCollapseSidebar && (
+            <button
+              onClick={onCollapseSidebar}
+              title="Collapse Sidebar"
+              className="p-1 rounded hover:opacity-80 cursor-pointer transition-opacity ml-0.5"
+              style={{ color: ui.sidebarFg }}
+            >
+              <VscChevronLeft className="w-4 h-4" />
+            </button>
+          )}
         </div>
         <input ref={uploadRef} type="file" multiple className="hidden" onChange={handleInputChange} />
       </div>
@@ -248,41 +259,62 @@ export function UploadPanel({ selectedUpload, onSelect, themeConfig, spaceName, 
       {/* Share bar – only when file selected */}
       {selectedUpload && (
         <div
-          className="shrink-0 px-3 py-2 border-t text-[11px]"
+          className="shrink-0 border-t text-[11px]"
           style={{ borderColor: ui.border }}
         >
-          <button
-            onClick={() => setShareModalOpen(true)}
-            className="flex items-center gap-1.5 mb-1.5 hover:opacity-100 opacity-80 cursor-pointer transition-opacity"
-            title="Open Share Options"
-          >
-            <VscShare className="w-3.5 h-3.5" style={{ color: ui.activeBorder }} />
-            <span className="uppercase tracking-wide text-[10px] font-semibold" style={{ color: ui.activeBorder }}>
-              Share Options & QR
-            </span>
-          </button>
-
           <div
-            onClick={() => setShareModalOpen(true)}
-            className="flex items-center gap-1 px-2 py-1 rounded cursor-pointer transition-colors"
-            style={{ backgroundColor: `${ui.activeBorder}18`, border: `1px solid ${ui.activeBorder}44` }}
-            title="Click to view full share modal & QR"
+            onClick={() => setIsShareSectionOpen(!isShareSectionOpen)}
+            className="flex items-center justify-between px-3 py-2 cursor-pointer hover:bg-white/5 transition-colors select-none"
+            title={isShareSectionOpen ? "Click to collapse share section" : "Click to expand share section"}
           >
-            <span className="flex-1 truncate opacity-70 text-[10px]">/s/{selectedUpload._id}</span>
+            <div className="flex items-center gap-1.5">
+              {isShareSectionOpen ? (
+                <VscChevronDown className="w-3.5 h-3.5 opacity-70" />
+              ) : (
+                <VscChevronRight className="w-3.5 h-3.5 opacity-70" />
+              )}
+              <VscShare className="w-3.5 h-3.5" style={{ color: ui.activeBorder }} />
+              <span className="uppercase tracking-wide text-[10px] font-semibold" style={{ color: ui.activeBorder }}>
+                Share Options & QR
+              </span>
+            </div>
             <button
               onClick={(e) => {
                 e.stopPropagation();
-                handleCopy();
+                setShareModalOpen(true);
               }}
-              className="shrink-0 cursor-pointer hover:opacity-80 p-0.5"
-              title="Copy Direct URL"
+              className="text-[10px] opacity-60 hover:opacity-100 hover:underline cursor-pointer"
+              title="Open full share modal"
             >
-              {copied
-                ? <VscCheck className="w-3.5 h-3.5 text-green-400" />
-                : <VscCopy className="w-3.5 h-3.5" />
-              }
+              Open
             </button>
           </div>
+
+          {isShareSectionOpen && (
+            <div className="px-3 pb-2.5">
+              <div
+                onClick={() => setShareModalOpen(true)}
+                className="flex items-center gap-1 px-2 py-1 rounded cursor-pointer transition-colors"
+                style={{ backgroundColor: `${ui.activeBorder}18`, border: `1px solid ${ui.activeBorder}44` }}
+                title="Click to view full share modal & QR"
+              >
+                <span className="flex-1 truncate opacity-70 text-[10px]">/s/{selectedUpload._id}</span>
+                <button
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    handleCopy();
+                  }}
+                  className="shrink-0 cursor-pointer hover:opacity-80 p-0.5"
+                  title="Copy Direct URL"
+                >
+                  {copied
+                    ? <VscCheck className="w-3.5 h-3.5 text-green-400" />
+                    : <VscCopy className="w-3.5 h-3.5" />
+                  }
+                </button>
+              </div>
+            </div>
+          )}
         </div>
       )}
 

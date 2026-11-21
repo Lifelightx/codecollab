@@ -500,15 +500,19 @@ function CodeSpacePage() {
               {/* Explorer icon */}
               <button
                 onClick={() => {
-                  setSidebarPanel('explorer');
-                  setIsSidebarOpen(true);
+                  if (isSidebarOpen && sidebarPanel === 'explorer') {
+                    setIsSidebarOpen(false);
+                  } else {
+                    setSidebarPanel('explorer');
+                    setIsSidebarOpen(true);
+                  }
                 }}
                 className="p-2.5 rounded transition-all cursor-pointer"
                 style={{
                   color: isSidebarOpen && sidebarPanel === 'explorer' ? ui.activityBarActiveBorder : ui.activityBarFg,
                   borderLeft: isSidebarOpen && sidebarPanel === 'explorer' ? `2px solid ${ui.activityBarActiveBorder}` : '2px solid transparent',
                 }}
-                title="Explorer"
+                title={isSidebarOpen && sidebarPanel === 'explorer' ? "Explorer (Click to collapse)" : "Explorer"}
               >
                 <VscFiles className="w-5 h-5" />
               </button>
@@ -516,15 +520,19 @@ function CodeSpacePage() {
               {/* Upload icon */}
               <button
                 onClick={() => {
-                  setSidebarPanel('uploads');
-                  setIsSidebarOpen(true);
+                  if (isSidebarOpen && sidebarPanel === 'uploads') {
+                    setIsSidebarOpen(false);
+                  } else {
+                    setSidebarPanel('uploads');
+                    setIsSidebarOpen(true);
+                  }
                 }}
                 className="p-2.5 rounded transition-all cursor-pointer"
                 style={{
                   color: isSidebarOpen && sidebarPanel === 'uploads' ? ui.activityBarActiveBorder : ui.activityBarFg,
                   borderLeft: isSidebarOpen && sidebarPanel === 'uploads' ? `2px solid ${ui.activityBarActiveBorder}` : '2px solid transparent',
                 }}
-                title="Uploads"
+                title={isSidebarOpen && sidebarPanel === 'uploads' ? "Uploads (Click to collapse)" : "Uploads"}
               >
                 <VscCloudUpload className="w-5 h-5" />
               </button>
@@ -580,6 +588,7 @@ function CodeSpacePage() {
                     onRefresh={() => fetchCodeSpaceData(null)}
                     themeConfig={themeConfig}
                     isOwner={!!user}
+                    onCollapseSidebar={() => setIsSidebarOpen(false)}
                   />
                 ) : (
                   <UploadPanel
@@ -588,6 +597,7 @@ function CodeSpacePage() {
                     themeConfig={themeConfig}
                     spaceName={spaceName}
                     defaultFileId={searchParams.get('fileId')}
+                    onCollapseSidebar={() => setIsSidebarOpen(false)}
                   />
                 )}
               </div>

@@ -195,6 +195,55 @@ module.exports = (io) => {
         }
     });
 
+    // Save or update file from CLI / API
+    router.post('/:name/file', async (req, res) => {
+        const { fileName, path = '', content = '', language = 'plaintext' } = req.body;
+        if (!fileName) {
+            return res.status(400).json({ msg: 'fileName is required' });
+        }
+
+        try {
+            const spaceName = req.params.name.toLowerCase();
+            let space = await Codespace.findOne({ name: spaceName });
+
+            if (!space) {
+                // Auto create space if doesn't exist
+                space = new Codespace({
+                    name: spaceName,
+                    expiresAt: getExpirationDate(false),
+                    files: []
+                });
+            }
+
+            const existingIndex = space.files.findIndex(f => 
+                f.name.toLowerCase() === fileName.toLowerCase() && (f.path || '') === (path || '')
+            );
+
+            if (existingIndex >= 0) {
+                space.files[existingIndex].content = content;
+                space.files[existingIndex].language = language || space.files[existingIndex].language;
+                await space.save();
+                io.to(spaceName).emit('code-updated', { file: fileName, path, content });
+            } else {
+                space.files.push({
+                    name: fileName,
+                    language,
+                    content,
+                    isFolder: false,
+                    path
+                });
+                await space.save();
+                io.to(spaceName).emit('file-created', space.files);
+            }
+
+            logger.info(`File '${fileName}' saved via CLI in '${spaceName}'`, null, 'CODESPACE');
+            res.json({ msg: 'File saved successfully', files: space.files });
+        } catch (err) {
+            logger.error(`Save file error in '${req.params.name}': ${err.message}`, err, 'CODESPACE');
+            res.status(500).json({ message: err.message });
+        }
+    });
+
     router.delete("/:name/delete", async (req, res) => {
         const { file, path, isFolder } = req.body;
 

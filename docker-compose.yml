@@ -33,6 +33,20 @@ services:
     depends_on:
       - mongo
 
+  cli-ssh:
+    image: ${DOCKER_USERNAME}/codecollab-cli-ssh:${CLI_TAG:-latest}
+    container_name: codecollab-cli-ssh
+    restart: unless-stopped
+    ports:
+      - "2222:2222"
+    environment:
+      - SSH_PORT=2222
+      - BACKEND_URL=http://backend:5000
+    networks:
+      - app-network
+    depends_on:
+      - backend
+
   mongo:
     image: mongo:latest
     container_name: mongo

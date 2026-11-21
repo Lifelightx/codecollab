@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import {
-  VscNewFile, VscNewFolder, VscTrash, VscChevronDown, VscChevronRight,
+  VscNewFile, VscNewFolder, VscTrash, VscChevronDown, VscChevronRight, VscChevronLeft,
   VscFolder, VscFolderOpened, VscFile, VscRefresh
 } from 'react-icons/vsc';
 import FileIcon from './FileIcon';
@@ -17,6 +17,7 @@ function FileExplorer({
   spaceName,
   themeConfig,
   isOwner,
+  onCollapseSidebar,
 }) {
   const { user } = useAppContext();
 
@@ -315,6 +316,16 @@ function FileExplorer({
         style={{ color: ui.sidebarHeaderFg }}
       >
         <span>Explorer</span>
+        {onCollapseSidebar && (
+          <button
+            onClick={onCollapseSidebar}
+            title="Collapse Sidebar"
+            className="p-1 rounded hover:opacity-80 cursor-pointer transition-opacity"
+            style={{ color: ui.sidebarFg }}
+          >
+            <VscChevronLeft className="w-4 h-4" />
+          </button>
+        )}
       </div>
 
       {/* Workspace row */}

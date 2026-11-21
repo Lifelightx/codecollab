@@ -1,0 +1,13 @@
+{
+  "name": "codecollab-cli-ssh",
+  "version": "1.0.0",
+  "description": "Professional SSH Terminal Interface for CodeCollab",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "axios": "^1.7.9",
+    "ssh2": "^1.16.0"
+  }
+}
