@@ -37,8 +37,11 @@ const axios = require('axios');
 
 // ── Native SCP File Receiver ──────────────────────────────────────
 async function handleScp(stream, command, backendUrl, authUser, authToken) {
-  if (!authUser || !authToken) {
-    stream.write(Buffer.from('\x02Authentication required to upload files.\nPlease login when prompted or provide valid credentials.\n'));
+  let user = authUser;
+  let token = authToken;
+
+  if (!user || !token) {
+    stream.write(Buffer.from('\x02Authentication required to upload files.\nPlease specify your username: scp -P 2222 <file> <username>@jeeban.life:<room>/\n'));
     if (typeof stream.exit === 'function') stream.exit(1);
     stream.end();
     return;
@@ -179,13 +182,21 @@ const server = new Server(
       .on('authentication', async (ctx) => {
         const username = (ctx.username || '').trim();
 
+        // 1. If connecting for an interactive shell session or anonymous login:
+        // When user types `ssh -p 2222 jeeban.life`, OpenSSH uses local username.
+        // We accept anonymous/guest access on 'none' so users jump straight into the TUI.
         if (ctx.method === 'none') {
-          // Reject 'none' and only allow keyboard-interactive
-          return ctx.reject(['keyboard-interactive']);
+          // If no specific username was given (or empty/guest), accept immediately to open TUI!
+          if (!username || username === 'guest' || username.toLowerCase() === 'anonymous') {
+            return ctx.accept();
+          }
+          // If a custom username/email was explicitly specified in the command (e.g. scp user@jeeban.life or ssh user@jeeban.life),
+          // require keyboard-interactive or password auth
+          return ctx.reject(['keyboard-interactive', 'password']);
         }
 
+        // 2. Keyboard-Interactive Auth (used when username is specified or user wants to authenticate)
         if (ctx.method === 'keyboard-interactive') {
-          // Provide interactive prompts for username/email and password
           const prompts = [];
           if (!username || username === 'root' || username.toLowerCase() === 'guest' || username.includes('@') || username.includes('.')) {
             prompts.push({ prompt: 'CodeCollab Email or Username: ', echo: true });
@@ -203,9 +214,7 @@ const server = new Server(
               pass = responses[0] || '';
             }
 
-            // Allow empty or guest login only if connecting without credentials for shell
             if (!userIdentifier || userIdentifier.toLowerCase() === 'guest') {
-              // Guest access allowed for interactive shell
               authUser = null;
               authToken = null;
               return ctx.accept();
@@ -225,7 +234,6 @@ const server = new Server(
               authAttempts += 1;
               console.warn(`[SSH] Login failed (${authAttempts}/3) for '${userIdentifier}': ${err.response?.data?.message || err.message}`);
               if (authAttempts >= 3) {
-                // Terminate connection immediately on 3 failed attempts
                 client.end();
                 return ctx.reject();
               }
@@ -234,6 +242,7 @@ const server = new Server(
           });
         }
 
+        // 3. Password Auth
         if (ctx.method === 'password') {
           try {
             const res = await axios.post(`${BACKEND_URL}/api/auth/login`, {
