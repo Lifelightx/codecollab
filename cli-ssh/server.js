@@ -173,14 +173,15 @@ const server = new Server(
 
     let authUser = null;
     let authToken = null;
+    let authAttempts = 0;
 
     client
       .on('authentication', async (ctx) => {
         const username = (ctx.username || '').trim();
 
         if (ctx.method === 'none') {
-          // Reject 'none' with supported interactive/password methods
-          return ctx.reject(['keyboard-interactive', 'password']);
+          // Reject 'none' and only allow keyboard-interactive
+          return ctx.reject(['keyboard-interactive']);
         }
 
         if (ctx.method === 'keyboard-interactive') {
@@ -221,8 +222,14 @@ const server = new Server(
               console.log(`[SSH] Authenticated user '${authUser.username}' via keyboard-interactive [IP: ${clientIp}]`);
               return ctx.accept();
             } catch (err) {
-              console.warn(`[SSH] Login failed for '${userIdentifier}': ${err.response?.data?.message || err.message}`);
-              return ctx.reject(['keyboard-interactive', 'password']);
+              authAttempts += 1;
+              console.warn(`[SSH] Login failed (${authAttempts}/3) for '${userIdentifier}': ${err.response?.data?.message || err.message}`);
+              if (authAttempts >= 3) {
+                // Terminate connection immediately on 3 failed attempts
+                client.end();
+                return ctx.reject();
+              }
+              return ctx.reject(['keyboard-interactive']);
             }
           });
         }
@@ -239,12 +246,17 @@ const server = new Server(
             console.log(`[SSH] Authenticated user '${authUser.username}' [IP: ${clientIp}]`);
             return ctx.accept();
           } catch (err) {
-            console.warn(`[SSH] Login failed for '${username}': ${err.response?.data?.message || err.message}`);
-            return ctx.reject(['keyboard-interactive', 'password']);
+            authAttempts += 1;
+            console.warn(`[SSH] Login failed (${authAttempts}/3) for '${username}': ${err.response?.data?.message || err.message}`);
+            if (authAttempts >= 3) {
+              client.end();
+              return ctx.reject();
+            }
+            return ctx.reject(['keyboard-interactive']);
           }
         }
 
-        ctx.reject(['keyboard-interactive', 'password']);
+        ctx.reject(['keyboard-interactive']);
       })
       .on('ready', () => {
         console.log(`[SSH] Client session ready: ${clientIp} (${authUser ? authUser.username : 'Guest'})`);
