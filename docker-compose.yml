@@ -42,6 +42,9 @@ services:
     environment:
       - SSH_PORT=2222
       - BACKEND_URL=http://backend:5000
+      - KEY_PATH=/data/host_key.pem
+    volumes:
+      - cli_ssh_data:/data
     networks:
       - app-network
     depends_on:
@@ -62,3 +65,4 @@ networks:
 
 volumes:
   mongo_data:
+  cli_ssh_data:
