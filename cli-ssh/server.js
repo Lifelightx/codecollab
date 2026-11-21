@@ -11,13 +11,16 @@ const KEY_PATH = process.env.KEY_PATH || path.join(__dirname, 'host_key.pem');
 // ── Ensure Host Key ───────────────────────────────────────────────
 function getOrCreateHostKey() {
   if (fs.existsSync(KEY_PATH)) {
-    return fs.readFileSync(KEY_PATH);
+    const existing = fs.readFileSync(KEY_PATH, 'utf8');
+    if (existing.includes('BEGIN RSA PRIVATE KEY') || existing.includes('BEGIN OPENSSH PRIVATE KEY')) {
+      return existing;
+    }
   }
-  console.log('[SSH] Generating new 2048-bit RSA host key...');
+  console.log('[SSH] Generating new 2048-bit RSA host key (PKCS1 format)...');
   const { privateKey } = crypto.generateKeyPairSync('rsa', {
     modulusLength: 2048,
-    publicKeyEncoding: { type: 'spki', format: 'pem' },
-    privateKeyEncoding: { type: 'pkcs8', format: 'pem' },
+    publicKeyEncoding: { type: 'pkcs1', format: 'pem' },
+    privateKeyEncoding: { type: 'pkcs1', format: 'pem' },
   });
   try {
     fs.mkdirSync(path.dirname(KEY_PATH), { recursive: true });

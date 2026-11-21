@@ -1,7 +1,7 @@
 const axios = require('axios');
 const readline = require('readline');
 
-// ANSI formatting helpers
+// ANSI formatting helpers (strict clean monochrome & accents, zero emojis)
 const C = {
   reset: '\x1b[0m',
   bold: '\x1b[1m',
@@ -23,6 +23,8 @@ class TerminalSession {
     this.room = options.room || 'general';
     this.rl = null;
     this.running = true;
+    this.token = null;
+    this.user = null;
   }
 
   write(text) {
@@ -40,10 +42,15 @@ class TerminalSession {
   }
 
   printHeader() {
+    const userDisplay = this.user
+      ? `${C.green}${this.user.username}${C.reset} (${this.user.email})`
+      : `${C.yellow}Guest${C.reset} [Log in via command 6]`;
+
     this.writeln(`${C.gray}┌────────────────────────────────────────────────────────────────────────┐${C.reset}`);
     this.writeln(`${C.gray}│${C.reset}  ${C.bold}${C.white}CODECOLLAB TERMINAL CLIENT${C.reset} ${C.gray}v1.0.0${C.reset}                                    ${C.gray}│${C.reset}`);
     this.writeln(`${C.gray}│${C.reset}  Endpoint : ${C.cyan}https://jeeban.life${C.reset}                     Status : ${C.green}CONNECTED${C.reset}    ${C.gray}│${C.reset}`);
     this.writeln(`${C.gray}└────────────────────────────────────────────────────────────────────────┘${C.reset}`);
+    this.writeln(`Active User      : ${userDisplay}`);
     this.writeln(`Active Workspace : ${C.bold}${C.yellow}${this.room}${C.reset}`);
     this.writeln(`Web URL          : ${C.cyan}https://jeeban.life/${this.room}${C.reset}`);
     this.writeln();
@@ -54,6 +61,43 @@ class TerminalSession {
       this.rl.question(questionText, (answer) => {
         resolve((answer || '').trim());
       });
+    });
+  }
+
+  // Masked secret prompt (prints '*' for passwords)
+  async promptSecret(questionText) {
+    // Temporarily pause readline interface to capture raw keystrokes
+    this.rl.pause();
+    this.write(questionText);
+
+    return new Promise((resolve) => {
+      let secret = '';
+      const onData = (chunk) => {
+        const str = chunk.toString();
+        for (let i = 0; i < str.length; i++) {
+          const char = str[i];
+          if (char === '\r' || char === '\n') {
+            this.stream.removeListener('data', onData);
+            this.writeln();
+            this.rl.resume();
+            return resolve(secret);
+          } else if (char === '\u0008' || char === '\x7f') { // Backspace
+            if (secret.length > 0) {
+              secret = secret.slice(0, -1);
+              this.write('\b \b');
+            }
+          } else if (char === '\u0003') { // Ctrl+C
+            this.stream.removeListener('data', onData);
+            this.writeln();
+            this.rl.resume();
+            return resolve('');
+          } else if (char >= ' ' && char <= '~') {
+            secret += char;
+            this.write('*');
+          }
+        }
+      };
+      this.stream.on('data', onData);
     });
   }
 
@@ -70,14 +114,21 @@ class TerminalSession {
     while (this.running) {
       this.writeln(`${C.bold}Available Commands:${C.reset}`);
       this.writeln(`  ${C.cyan}[1]${C.reset} Paste Text / Code Buffer`);
-      this.writeln(`  ${C.cyan}[2]${C.reset} List Files in Workspace`);
-      this.writeln(`  ${C.cyan}[3]${C.reset} View File Content`);
-      this.writeln(`  ${C.cyan}[4]${C.reset} Switch Active Workspace`);
-      this.writeln(`  ${C.cyan}[5]${C.reset} Get Workspace Share Link`);
+      this.writeln(`  ${C.cyan}[2]${C.reset} Upload File to Storage (Requires Login)`);
+      this.writeln(`  ${C.cyan}[3]${C.reset} List Files in Workspace`);
+      this.writeln(`  ${C.cyan}[4]${C.reset} View File Content`);
+      this.writeln(`  ${C.cyan}[5]${C.reset} Switch Active Workspace`);
+      if (!this.user) {
+        this.writeln(`  ${C.cyan}[6]${C.reset} Log In`);
+        this.writeln(`  ${C.cyan}[7]${C.reset} Register (New Account)`);
+      } else {
+        this.writeln(`  ${C.cyan}[6]${C.reset} Log Out (${this.user.username})`);
+      }
+      this.writeln(`  ${C.cyan}[8]${C.reset} Workspace Access Info`);
       this.writeln(`  ${C.cyan}[0]${C.reset} Exit`);
       this.writeln();
 
-      const choice = await this.prompt(`${C.bold}Command [0-5]: ${C.reset}`);
+      const choice = await this.prompt(`${C.bold}Command: ${C.reset}`);
       this.writeln();
 
       switch (choice) {
@@ -85,15 +136,32 @@ class TerminalSession {
           await this.handlePasteBuffer();
           break;
         case '2':
-          await this.handleListFiles();
+          await this.handleFileUpload();
           break;
         case '3':
-          await this.handleViewFile();
+          await this.handleListFiles();
           break;
         case '4':
-          await this.handleSwitchRoom();
+          await this.handleViewFile();
           break;
         case '5':
+          await this.handleSwitchRoom();
+          break;
+        case '6':
+          if (this.user) {
+            this.handleLogout();
+          } else {
+            await this.handleLogin();
+          }
+          break;
+        case '7':
+          if (!this.user) {
+            await this.handleRegister();
+          } else {
+            this.writeln(`${C.yellow}[INFO] You are already logged in as '${this.user.username}'.${C.reset}\n`);
+          }
+          break;
+        case '8':
           this.handleShowLink();
           break;
         case '0':
@@ -104,17 +172,191 @@ class TerminalSession {
           this.stream.end();
           return;
         default:
-          this.writeln(`${C.red}[ERROR] Invalid selection. Enter a number between 0 and 5.${C.reset}\n`);
+          this.writeln(`${C.red}[ERROR] Invalid selection. Enter a number between 0 and 8.${C.reset}\n`);
           break;
       }
     }
   }
 
+  // ── Authentication Handlers ─────────────────────────────────────
+  async handleLogin() {
+    this.writeln(`${C.gray}┌── [ USER LOGIN ] ─────────────────────────────────────────────────────┐${C.reset}`);
+    this.writeln(`${C.gray}│${C.reset} Enter your CodeCollab credentials to log in.                           ${C.gray}│${C.reset}`);
+    this.writeln(`${C.gray}└───────────────────────────────────────────────────────────────────────┘${C.reset}`);
+
+    const identifier = await this.prompt('Username or Email : ');
+    if (!identifier) {
+      this.writeln(`${C.yellow}[INFO] Login cancelled.${C.reset}\n`);
+      return false;
+    }
+
+    const password = await this.promptSecret('Password          : ');
+    if (!password) {
+      this.writeln(`${C.yellow}[INFO] Login cancelled.${C.reset}\n`);
+      return false;
+    }
+
+    this.writeln(`${C.blue}[WAIT] Authenticating with server...${C.reset}`);
+
+    try {
+      const res = await axios.post(`${this.backendUrl}/api/auth/login`, {
+        identifier,
+        password,
+      });
+
+      this.token = res.data.token;
+      this.user = res.data.user;
+
+      this.writeln(`${C.green}[OK] Logged in successfully as '${this.user.username}'!${C.reset}`);
+      this.writeln(`Storage quota: ${( (this.user.storageUsedBytes || 0) / (1024 * 1024) ).toFixed(2)} MB / 200 MB used.\n`);
+      return true;
+    } catch (err) {
+      this.writeln(`${C.red}[ERROR] Authentication failed: ${err.response?.data?.message || err.message}${C.reset}\n`);
+      return false;
+    }
+  }
+
+  async handleRegister() {
+    this.writeln(`${C.gray}┌── [ CREATE ACCOUNT ] ─────────────────────────────────────────────────┐${C.reset}`);
+    this.writeln(`${C.gray}│${C.reset} Registration requires email verification via a 6-digit code.           ${C.gray}│${C.reset}`);
+    this.writeln(`${C.gray}└───────────────────────────────────────────────────────────────────────┘${C.reset}`);
+
+    const email = await this.prompt('Email Address    : ');
+    if (!email) return;
+
+    const username = await this.prompt('Choose Username  : ');
+    if (!username) return;
+
+    const password = await this.promptSecret('Choose Password  : ');
+    if (!password || password.length < 6) {
+      this.writeln(`${C.red}[ERROR] Password must be at least 6 characters.${C.reset}\n`);
+      return;
+    }
+
+    this.writeln(`${C.blue}[WAIT] Sending 6-digit verification code to '${email}'...${C.reset}`);
+
+    try {
+      const otpRes = await axios.post(`${this.backendUrl}/api/auth/send-otp`, {
+        email,
+        username,
+        password,
+      });
+
+      this.writeln(`${C.green}[OK] ${otpRes.data.message}${C.reset}`);
+      if (otpRes.data.simulated && otpRes.data.otpPreview) {
+        this.writeln(`${C.yellow}[DEV SIMULATION] Verification OTP: ${otpRes.data.otpPreview}${C.reset}`);
+      }
+
+      const otp = await this.prompt('Enter 6-digit code: ');
+      if (!otp) {
+        this.writeln(`${C.yellow}[INFO] Registration cancelled.${C.reset}\n`);
+        return;
+      }
+
+      this.writeln(`${C.blue}[WAIT] Verifying code...${C.reset}`);
+
+      const verifyRes = await axios.post(`${this.backendUrl}/api/auth/verify-otp`, {
+        email,
+        otp,
+      });
+
+      this.token = verifyRes.data.token;
+      this.user = verifyRes.data.user;
+
+      this.writeln(`${C.green}[OK] Account created and verified! Logged in as '${this.user.username}'.${C.reset}\n`);
+    } catch (err) {
+      this.writeln(`${C.red}[ERROR] Registration failed: ${err.response?.data?.message || err.message}${C.reset}\n`);
+    }
+  }
+
+  handleLogout() {
+    this.token = null;
+    this.user = null;
+    this.writeln(`${C.green}[OK] You have logged out. Now operating in Guest mode.${C.reset}\n`);
+  }
+
+  // ── File Upload via Storage API (Auth Required) ──────────────────
+  async handleFileUpload() {
+    if (!this.user || !this.token) {
+      this.writeln(`${C.yellow}[AUTH REQUIRED] File storage uploads require a signed-in account.${C.reset}`);
+      const doLogin = await this.prompt('Would you like to log in now? [y/N]: ');
+      if (doLogin.toLowerCase() === 'y') {
+        const ok = await this.handleLogin();
+        if (!ok) return;
+      } else {
+        return;
+      }
+    }
+
+    this.writeln(`${C.gray}┌── [ FILE UPLOAD ] ────────────────────────────────────────────────────┐${C.reset}`);
+    this.writeln(`${C.gray}│${C.reset} Paste the raw or Base64 content of the file.                          ${C.gray}│${C.reset}`);
+    this.writeln(`${C.gray}│${C.reset} Finish with :wq on a new line, or :q! to cancel.                       ${C.gray}│${C.reset}`);
+    this.writeln(`${C.gray}└───────────────────────────────────────────────────────────────────────┘${C.reset}`);
+
+    const fileName = await this.prompt('Target file name (e.g. document.pdf, image.png): ');
+    if (!fileName) return;
+
+    this.writeln(`\n${C.yellow}[INPUT] Paste file contents or Base64 stream (finish with :wq):${C.reset}`);
+
+    const lines = [];
+    while (true) {
+      const line = await this.prompt('');
+      if (line.trim() === ':wq') break;
+      if (line.trim() === ':q!') {
+        this.writeln(`${C.yellow}[INFO] Upload cancelled.${C.reset}\n`);
+        return;
+      }
+      lines.push(line);
+    }
+
+    const rawData = lines.join('\n');
+    if (!rawData.trim()) {
+      this.writeln(`${C.yellow}[WARN] No content provided. Upload aborted.${C.reset}\n`);
+      return;
+    }
+
+    // Determine if user entered raw text or pure base64
+    let fileBuffer;
+    const isBase64 = /^[A-Za-z0-9+/=\s]+$/.test(rawData) && rawData.length % 4 === 0 && !rawData.includes(' ');
+    if (isBase64) {
+      fileBuffer = Buffer.from(rawData.replace(/\s+/g, ''), 'base64');
+    } else {
+      fileBuffer = Buffer.from(rawData, 'utf8');
+    }
+
+    this.writeln(`${C.blue}[WAIT] Uploading ${fileBuffer.length} bytes to workspace '${this.room}'...${C.reset}`);
+
+    try {
+      const FormData = require('form-data');
+      const form = new FormData();
+      form.append('spaceName', this.room);
+      form.append('files', fileBuffer, { filename: fileName });
+
+      const res = await axios.post(`${this.backendUrl}/api/uploads`, form, {
+        headers: {
+          ...form.getHeaders(),
+          Authorization: `Bearer ${this.token}`,
+        },
+      });
+
+      const uploaded = res.data?.uploads?.[0];
+      this.writeln(`${C.green}[OK] File '${fileName}' uploaded successfully!${C.reset}`);
+      if (uploaded) {
+        this.writeln(`File ID     : ${uploaded._id}`);
+        this.writeln(`Direct Link : ${C.cyan}https://jeeban.life/s/${uploaded._id}${C.reset}`);
+      }
+      this.writeln();
+    } catch (err) {
+      this.writeln(`${C.red}[ERROR] Upload failed: ${err.response?.data?.message || err.message}${C.reset}\n`);
+    }
+  }
+
+  // ── Quick Paste Buffer (Works for both Guests and Auth) ───────────
   async handlePasteBuffer() {
     this.writeln(`${C.gray}┌── [ PASTE BUFFER ] ───────────────────────────────────────────────────┐${C.reset}`);
-    this.writeln(`${C.gray}│${C.reset} Enter file name and paste your content.                               ${C.gray}│${C.reset}`);
-    this.writeln(`${C.gray}│${C.reset} To finish: Type ${C.bold}:wq${C.reset} on a new line and press Enter.                     ${C.gray}│${C.reset}`);
-    this.writeln(`${C.gray}│${C.reset} To cancel: Type ${C.bold}:q!${C.reset} on a new line.                                      ${C.gray}│${C.reset}`);
+    this.writeln(`${C.gray}│${C.reset} Paste your code/text snippet below.                                    ${C.gray}│${C.reset}`);
+    this.writeln(`${C.gray}│${C.reset} To save: Type :wq on a new line and press Enter.                       ${C.gray}│${C.reset}`);
+    this.writeln(`${C.gray}│${C.reset} To cancel: Type :q! on a new line.                                     ${C.gray}│${C.reset}`);
     this.writeln(`${C.gray}└───────────────────────────────────────────────────────────────────────┘${C.reset}`);
 
     let fileName = await this.prompt(`File name [default: snippet.txt]: `);
@@ -125,9 +367,7 @@ class TerminalSession {
     const lines = [];
     while (true) {
       const line = await this.prompt('');
-      if (line.trim() === ':wq') {
-        break;
-      }
+      if (line.trim() === ':wq') break;
       if (line.trim() === ':q!') {
         this.writeln(`${C.yellow}[INFO] Paste cancelled.${C.reset}\n`);
         return;
@@ -144,7 +384,7 @@ class TerminalSession {
     this.writeln(`${C.blue}[WAIT] Saving '${fileName}' to workspace '${this.room}'...${C.reset}`);
 
     try {
-      const res = await axios.post(`${this.backendUrl}/api/codespaces/${this.room}/file`, {
+      await axios.post(`${this.backendUrl}/api/codespaces/${this.room}/file`, {
         fileName,
         content,
         language: this.detectLanguage(fileName),
@@ -189,7 +429,7 @@ class TerminalSession {
   }
 
   async handleViewFile() {
-    let fileName = await this.prompt('Enter file name to view: ');
+    const fileName = await this.prompt('Enter file name to view: ');
     if (!fileName) return;
 
     try {
@@ -241,7 +481,6 @@ class TerminalSession {
 
   // Non-interactive piped execution (e.g. cat file | ssh ...)
   async handlePipedExecution(commandString) {
-    // Parse arguments like --room <name> --file <name>
     const args = (commandString || '').split(/\s+/);
     let targetRoom = this.room;
     let targetFile = `upload_${Date.now()}.txt`;
