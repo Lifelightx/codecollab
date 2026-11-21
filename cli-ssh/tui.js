@@ -195,8 +195,8 @@ class TerminalSession {
       : `${C.gray}  [2] Uploads (${this.workspaceUploads.length})  ${C.reset}`;
 
     const currentFilename = this.activeTab === 'files'
-      ? (this.currentFile ? `  ${C.pinkBright}${this.currentFile.name}${C.reset} ${C.dim}(${this.currentFile.language || 'text'})${C.reset}` : '  (No file open)')
-      : `  ${C.pinkBright}Uploads Manager - Storage Used: ${((this.user?.storageUsedBytes || 0) / (1024 * 1024)).toFixed(1)} MB / 200 MB${C.reset}`;
+      ? (this.currentFile ? `  ${C.pink}${this.currentFile.name}${C.reset} ${C.green}(${this.currentFile.language || 'text'})${C.reset}` : '  (No file open)')
+      : `  ${C.pink}Codespace: ${C.green}${C.bold}${this.room}${C.reset}`;
 
     const leftTabSpace = sidebarWidth - 24;
     const tabPad = leftTabSpace > 0 ? ' '.repeat(leftTabSpace) : '';
@@ -212,7 +212,7 @@ class TerminalSession {
     if (this.activeTab === 'files') {
       leftLines.push(`${C.bold}${C.green} EXPLORER${C.reset}`);
       if (this.workspaceFiles.length === 0) {
-        leftLines.push(`${C.dim}  (No files)${C.reset}`);
+        leftLines.push(`  (No files)`);
       } else {
         this.workspaceFiles.forEach((file, idx) => {
           const isSelected = idx === this.selectedFileIndex;
@@ -225,19 +225,19 @@ class TerminalSession {
           } else if (isOpened) {
             leftLines.push(`${prefix}${C.green}${name}${C.reset}`);
           } else {
-            leftLines.push(`${prefix}${C.grayLight}${name}${C.reset}`);
+            leftLines.push(`${prefix}${name}`);
           }
         });
       }
       leftLines.push('');
-      leftLines.push(`${C.dim} [N] + New File${C.reset}`);
-      leftLines.push(`${C.dim} [P] Paste/Edit${C.reset}`);
-      leftLines.push(`${C.dim} [D] Delete File${C.reset}`);
+      leftLines.push(` [N] + New File`);
+      leftLines.push(` [P] Paste/Edit`);
+      leftLines.push(` [D] Delete File`);
     } else {
       leftLines.push(`${C.bold}${C.pink} UPLOADS (${this.workspaceUploads.length})${C.reset}`);
       if (this.workspaceUploads.length === 0) {
-        leftLines.push(`${C.dim}  (No uploads)${C.reset}`);
-        leftLines.push(`${C.dim}  Use SCP to upload${C.reset}`);
+        leftLines.push(`  (No uploads)`);
+        leftLines.push(`  Use SCP to upload`);
       } else {
         this.workspaceUploads.forEach((u, idx) => {
           const isSelected = idx === this.selectedUploadIndex;
@@ -247,13 +247,12 @@ class TerminalSession {
           if (isSelected) {
             leftLines.push(`${prefix}${C.pink}${C.bold}${name}${C.reset}`);
           } else {
-            leftLines.push(`${prefix}${C.grayLight}${name}${C.reset}`);
+            leftLines.push(`${prefix}${C.green}${name}${C.reset}`);
           }
         });
       }
       leftLines.push('');
-      leftLines.push(`${C.dim} [Enter] Download${C.reset}`);
-      leftLines.push(`${C.dim} [U] Direct SCP Guide${C.reset}`);
+      leftLines.push(` [U] Direct SCP Guide`);
     }
 
     // Prepare Right Content Lines
@@ -264,12 +263,12 @@ class TerminalSession {
         rawLines.forEach((l, i) => {
           const lineNum = `${(i + 1).toString().padStart(3, ' ')} │ `;
           const truncated = l.length > editorWidth - 8 ? l.slice(0, editorWidth - 11) + '...' : l;
-          rightLines.push(`${C.dim}${lineNum}${C.reset}${C.white}${truncated}${C.reset}`);
+          rightLines.push(`${C.pink}${lineNum}${C.reset}${truncated}`);
         });
       } else if (this.currentFile) {
-        rightLines.push(`${C.dim}  (Empty file. Press [P] to paste or edit content)${C.reset}`);
+        rightLines.push(`  (Empty file. Press [P] to paste or edit content)`);
       } else {
-        rightLines.push(`${C.dim}  Select a file from the explorer on the left or press [N] to create one.${C.reset}`);
+        rightLines.push(`  Select a file from the explorer on the left or press [N] to create one.`);
       }
     } else {
       // Upload Tab Details
@@ -277,26 +276,29 @@ class TerminalSession {
       if (selectedUpload) {
         rightLines.push('');
         rightLines.push(`  ${C.bold}${C.pink}FILE DETAILS${C.reset}`);
-        rightLines.push(`  ${C.dim}────────────────────────────────────────────────────────────────────────${C.reset}`);
-        rightLines.push(`  ${C.bold}Original Name :${C.reset} ${C.green}${selectedUpload.originalName}${C.reset}`);
-        rightLines.push(`  ${C.bold}File Size     :${C.reset} ${((selectedUpload.size || 0) / 1024).toFixed(2)} KB (${selectedUpload.size} Bytes)`);
-        rightLines.push(`  ${C.bold}MIME Type     :${C.reset} ${selectedUpload.mimeType || 'application/octet-stream'}`);
-        rightLines.push(`  ${C.bold}Uploaded At   :${C.reset} ${new Date(selectedUpload.createdAt).toLocaleString()}`);
-        rightLines.push(`  ${C.bold}Download URL  :${C.reset} ${C.pink}${C.underline}https://jeeban.life/s/${selectedUpload._id}${C.reset}`);
-        rightLines.push(`  ${C.dim}────────────────────────────────────────────────────────────────────────${C.reset}`);
+        rightLines.push(`  ${C.green}${'─'.repeat(Math.min(68, editorWidth - 6))}${C.reset}`);
+        rightLines.push(`  ${C.bold}${C.pink}Original Name :${C.reset} ${C.green}${selectedUpload.originalName}${C.reset}`);
+        rightLines.push(`  ${C.bold}${C.pink}File Size     :${C.reset} ${C.green}${((selectedUpload.size || 0) / 1024).toFixed(2)} KB (${selectedUpload.size} Bytes)${C.reset}`);
+        rightLines.push(`  ${C.bold}${C.pink}MIME Type     :${C.reset} ${C.green}${selectedUpload.mimeType || 'application/octet-stream'}${C.reset}`);
+        rightLines.push(`  ${C.bold}${C.pink}Uploaded At   :${C.reset} ${C.green}${new Date(selectedUpload.createdAt).toLocaleString()}${C.reset}`);
+        rightLines.push(`  ${C.bold}${C.pink}Share URL     :${C.reset} ${C.green}${C.underline}https://jeeban.life/s/${selectedUpload._id}${C.reset}`);
+        rightLines.push(`  ${C.green}${'─'.repeat(Math.min(68, editorWidth - 6))}${C.reset}`);
         rightLines.push('');
-        rightLines.push(`  ${C.green}${C.bold}[Press ENTER]${C.reset} -> Import this file into the live workspace tree`);
-        rightLines.push(`  ${C.cyan}${C.bold}[Download to your local machine (pwd)]:${C.reset}`);
-        rightLines.push(`    Run in your local terminal:`);
-        rightLines.push(`    ${C.green}${C.bold}scp -P 2222 jeeban.life:${this.room}/"${selectedUpload.originalName}" ./${C.reset}`);
-        rightLines.push(`    or with curl:`);
-        rightLines.push(`    ${C.yellow}curl -o "${selectedUpload.originalName}" https://jeeban.life/s/${selectedUpload._id}${C.reset}`);
+        rightLines.push(`  ${C.bold}${C.pink}Download to your machine (pwd):${C.reset}`);
+        rightLines.push(`  ${C.green}┌── [ SCP COMMAND ] ──────────────────────────────────────────────────┐${C.reset}`);
+        rightLines.push(`  ${C.green}│${C.reset} scp -P 2222 jeeban.life:${this.room}/"${selectedUpload.originalName}" ./`);
+        rightLines.push(`  ${C.green}└─────────────────────────────────────────────────────────────────────┘${C.reset}`);
+        rightLines.push('');
+        rightLines.push(`  ${C.bold}${C.pink}Or via Curl:${C.reset}`);
+        rightLines.push(`  ${C.green}┌── [ CURL COMMAND ] ─────────────────────────────────────────────────┐${C.reset}`);
+        rightLines.push(`  ${C.green}│${C.reset} curl -O https://jeeban.life/s/${selectedUpload._id}`);
+        rightLines.push(`  ${C.green}└─────────────────────────────────────────────────────────────────────┘${C.reset}`);
       } else {
         rightLines.push('');
-        rightLines.push(`  ${C.yellow}No uploaded files found in this workspace.${C.reset}`);
+        rightLines.push(`  ${C.pink}No uploaded files found in this workspace.${C.reset}`);
         rightLines.push('');
-        rightLines.push(`  You can upload files directly from your computer terminal using SCP:`);
-        rightLines.push(`    ${C.green}${C.bold}scp -P 2222 <local-file> ${this.user ? this.user.username : '<username>'}@jeeban.life:${this.room}/${C.reset}`);
+        rightLines.push(`  Upload files directly from your terminal:`);
+        rightLines.push(`  ${C.green}scp -P 2222 <local-file> ${this.user ? this.user.username : '<username>'}@jeeban.life:${this.room}/${C.reset}`);
       }
     }
 
@@ -398,9 +400,6 @@ class TerminalSession {
               this.statusMessage = `Opened '${this.currentFile.name}'`;
               this.renderIDE();
             }
-          } else {
-            // Download selected upload into workspace files
-            await this.handleDownloadUpload();
           }
         } else if (key.toLowerCase() === 'p') { // Paste / Edit
           await this.handlePasteIntoCurrentFile();
