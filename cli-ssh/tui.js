@@ -285,8 +285,12 @@ class TerminalSession {
         rightLines.push(`  ${C.bold}Download URL  :${C.reset} ${C.pink}${C.underline}https://jeeban.life/s/${selectedUpload._id}${C.reset}`);
         rightLines.push(`  ${C.dim}────────────────────────────────────────────────────────────────────────${C.reset}`);
         rightLines.push('');
-        rightLines.push(`  ${C.green}${C.bold}[Press ENTER]${C.reset} -> Download this file into your workspace file tree`);
-        rightLines.push(`  ${C.pink}${C.bold}[Press U]${C.reset}     -> View SCP upload instructions`);
+        rightLines.push(`  ${C.green}${C.bold}[Press ENTER]${C.reset} -> Import this file into the live workspace tree`);
+        rightLines.push(`  ${C.cyan}${C.bold}[Download to your local machine (pwd)]:${C.reset}`);
+        rightLines.push(`    Run in your local terminal:`);
+        rightLines.push(`    ${C.green}${C.bold}scp -P 2222 jeeban.life:${this.room}/"${selectedUpload.originalName}" ./${C.reset}`);
+        rightLines.push(`    or with curl:`);
+        rightLines.push(`    ${C.yellow}curl -o "${selectedUpload.originalName}" https://jeeban.life/s/${selectedUpload._id}${C.reset}`);
       } else {
         rightLines.push('');
         rightLines.push(`  ${C.yellow}No uploaded files found in this workspace.${C.reset}`);

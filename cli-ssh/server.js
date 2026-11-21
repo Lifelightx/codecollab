@@ -35,8 +35,98 @@ const hostKey = getOrCreateHostKey();
 
 const axios = require('axios');
 
-// ── Native SCP File Receiver ──────────────────────────────────────
+// ── Native SCP File Receiver & Sender ─────────────────────────────
 async function handleScp(stream, command, backendUrl, authUser, authToken) {
+  const parts = command.split(/\s+/);
+  const isDownload = parts.includes('-f'); // scp -f is triggered when client downloads: scp host:file ./
+  const isUpload = parts.includes('-t');   // scp -t is triggered when client uploads: scp file host:
+
+  const target = parts[parts.length - 1] || 'general';
+  const cleanTarget = target.replace(/^\/+|\/+$/g, '');
+
+  let room = 'general';
+  let folder = '';
+  let requestedFileName = '';
+
+  if (cleanTarget && cleanTarget !== '.') {
+    const slash = cleanTarget.indexOf('/');
+    if (slash >= 0) {
+      room = cleanTarget.slice(0, slash);
+      const rest = cleanTarget.slice(slash + 1);
+      const lastSlash = rest.lastIndexOf('/');
+      if (lastSlash >= 0) {
+        folder = rest.slice(0, lastSlash);
+        requestedFileName = rest.slice(lastSlash + 1);
+      } else {
+        requestedFileName = rest;
+      }
+    } else {
+      room = cleanTarget;
+    }
+  }
+
+  // ── 1. SCP Download Handler (User runs: scp -P 2222 host:room/filename ./) ──
+  if (isDownload) {
+    try {
+      // Find file in room files or room uploads
+      let fileBuffer = null;
+      let finalName = requestedFileName || 'downloaded_file';
+
+      const spaceRes = await axios.get(`${backendUrl}/api/codespaces/${room}`);
+      const files = spaceRes.data?.files || [];
+      const matchFile = files.find((f) => !f.isFolder && (f.name === finalName || (f.path ? `${f.path}/${f.name}` : f.name) === cleanTarget.slice(room.length + 1)));
+
+      if (matchFile) {
+        fileBuffer = Buffer.from(matchFile.content || '', 'utf8');
+        finalName = matchFile.name;
+      } else {
+        // Look in uploads
+        const uploadsRes = await axios.get(`${backendUrl}/api/uploads?spaceName=${room}`);
+        const uploads = uploadsRes.data?.uploads || [];
+        const matchUpload = uploads.find((u) => u.originalName === finalName || u._id === finalName);
+        if (matchUpload) {
+          const dlRes = await axios.get(`${backendUrl}/api/uploads/share/${matchUpload._id}`, { responseType: 'arraybuffer' });
+          fileBuffer = Buffer.from(dlRes.data);
+          finalName = matchUpload.originalName;
+        }
+      }
+
+      if (!fileBuffer) {
+        stream.write(Buffer.from(`\x02scp: ${requestedFileName || cleanTarget}: No such file in workspace '${room}'\n`));
+        if (typeof stream.exit === 'function') stream.exit(1);
+        stream.end();
+        return;
+      }
+
+      // Wait for client null ACK to start transfer
+      const onClientAck = () => {
+        // Send file header: C0644 <length> <filename>\n
+        const header = `C0644 ${fileBuffer.length} ${finalName}\n`;
+        stream.write(Buffer.from(header));
+
+        stream.once('data', () => {
+          // Send file content followed by null byte
+          stream.write(fileBuffer);
+          stream.write(Buffer.from([0]));
+
+          stream.once('data', () => {
+            if (typeof stream.exit === 'function') stream.exit(0);
+            stream.end();
+          });
+        });
+      };
+
+      stream.once('data', onClientAck);
+      return;
+    } catch (err) {
+      stream.write(Buffer.from(`\x02scp: Download error: ${err.message}\n`));
+      if (typeof stream.exit === 'function') stream.exit(1);
+      stream.end();
+      return;
+    }
+  }
+
+  // ── 2. SCP Upload Handler (User runs: scp -P 2222 local-file host:room/) ──
   let user = authUser;
   let token = authToken;
 
@@ -45,23 +135,6 @@ async function handleScp(stream, command, backendUrl, authUser, authToken) {
     if (typeof stream.exit === 'function') stream.exit(1);
     stream.end();
     return;
-  }
-
-  const parts = command.split(/\s+/);
-  const target = parts[parts.length - 1] || 'general';
-  const cleanTarget = target.replace(/^\/+|\/+$/g, '');
-
-  let room = 'general';
-  let folder = '';
-
-  if (cleanTarget && cleanTarget !== '.') {
-    const slash = cleanTarget.indexOf('/');
-    if (slash >= 0) {
-      room = cleanTarget.slice(0, slash);
-      folder = cleanTarget.slice(slash + 1);
-    } else {
-      room = cleanTarget;
-    }
   }
 
   // Initial ACK
