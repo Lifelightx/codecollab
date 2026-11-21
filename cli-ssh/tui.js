@@ -457,7 +457,13 @@ class TerminalSession {
         });
 
         this.statusMessage = `Downloaded '${uploadItem.originalName}' into workspace files!`;
+        this.activeTab = 'files'; // Switch view to files so the user immediately sees it
         await this.fetchWorkspaceData();
+        const downloadedIdx = this.workspaceFiles.findIndex((f) => f.name === uploadItem.originalName);
+        if (downloadedIdx >= 0) {
+          this.selectedFileIndex = downloadedIdx;
+          this.currentFile = this.workspaceFiles[downloadedIdx];
+        }
       } catch (err) {
         this.statusMessage = `Download failed: ${err.message}`;
       }
