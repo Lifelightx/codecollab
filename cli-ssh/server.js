@@ -182,20 +182,19 @@ const server = new Server(
       .on('authentication', async (ctx) => {
         const username = (ctx.username || '').trim();
 
-        // 1. If connecting for an interactive shell session or anonymous login:
-        // When user types `ssh -p 2222 jeeban.life`, OpenSSH uses local username.
-        // We accept anonymous/guest access on 'none' so users jump straight into the TUI.
+        // 1. If connecting with method 'none':
+        // When running `ssh -p 2222 jeeban.life`, OpenSSH sends the local system username
+        // (e.g. 'jeebanjyoti.mallik@apmosys.mahape'). If no explicit CodeCollab email/user was specified,
+        // we accept on 'none' so the user directly enters the interactive TUI without being prompted!
+        // Only if a specific user requested authentication (like an email or registered username with @ or -u)
+        // or during SCP/non-interactive, keyboard-interactive is triggered.
         if (ctx.method === 'none') {
-          // If no specific username was given (or empty/guest), accept immediately to open TUI!
-          if (!username || username === 'guest' || username.toLowerCase() === 'anonymous') {
-            return ctx.accept();
-          }
-          // If a custom username/email was explicitly specified in the command (e.g. scp user@jeeban.life or ssh user@jeeban.life),
-          // require keyboard-interactive or password auth
-          return ctx.reject(['keyboard-interactive', 'password']);
+          // If the username looks like a local system account or guest/empty, let them straight into the TUI
+          // CodeCollab users either log in via TUI or authenticate explicitly with password
+          return ctx.accept();
         }
 
-        // 2. Keyboard-Interactive Auth (used when username is specified or user wants to authenticate)
+        // 2. Keyboard-Interactive Auth (used when explicit authentication is requested)
         if (ctx.method === 'keyboard-interactive') {
           const prompts = [];
           if (!username || username === 'root' || username.toLowerCase() === 'guest' || username.includes('@') || username.includes('.')) {
