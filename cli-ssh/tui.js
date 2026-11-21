@@ -229,8 +229,9 @@ class TerminalSession {
         });
       }
       leftLines.push('');
+      leftLines.push(` [i] Insert/Write`);
+      leftLines.push(` [o] Save Changes`);
       leftLines.push(` [N] + New File`);
-      leftLines.push(` [P] Paste/Edit`);
       leftLines.push(` [D] Delete File`);
     } else {
       leftLines.push(`${C.bold}${C.pink} UPLOADS (${this.workspaceUploads.length})${C.reset}`);
@@ -314,7 +315,9 @@ class TerminalSession {
 
     // ── 5. Status / Command Bar ────────────────────────────────────
     out += `${C.green}${'─'.repeat(cols)}${C.reset}\x1b[K\r\n`;
-    const navHelp = ` [↑/↓] Navigate | [Tab] Switch Tab | [Enter] Open/Action | [P] Paste/Edit | [N] New | [S] Switch Space | [Q] Exit`;
+    const navHelp = this.isEditing
+      ? ` [INSERT MODE] Type or paste text | Press [o] to SAVE | Press [Esc] to CANCEL`
+      : ` [↑/↓] Select File | [i] Write/Paste | [o] Save | [Tab] Switch Tab | [N] New | [S] Space | [Q] Exit`;
     out += `${C.dim}${navHelp}\x1b[K\r\n`;
     out += `${C.pink}STATUS:${C.reset} ${C.greenBright}${this.statusMessage}${C.reset}\x1b[K`;
 
@@ -400,8 +403,16 @@ class TerminalSession {
               this.renderIDE();
             }
           }
-        } else if (key.toLowerCase() === 'p') { // Paste / Edit
-          await this.handlePasteIntoCurrentFile();
+        } else if (key === 'i' || key === 'I') { // 'i' -> Enter insert/type/paste mode
+          if (this.activeTab === 'files') {
+            await this.handleDirectInlineEdit();
+          }
+        } else if (key === 'o' || key === 'O') { // 'o' -> Save directly
+          if (this.activeTab === 'files' && this.currentFile) {
+            await this.saveCurrentFile();
+          }
+        } else if (key.toLowerCase() === 'p') { // Paste / Edit (legacy shortcut also supported)
+          await this.handleDirectInlineEdit();
         } else if (key.toLowerCase() === 'n') { // New File
           await this.handleCreateNewFile();
         } else if (key.toLowerCase() === 'd') { // Delete File
@@ -476,7 +487,108 @@ class TerminalSession {
     this.renderIDE();
   }
 
-  // ── Paste / Edit File Content ────────────────────────────────────
+  // ── Save Current File Helper ────────────────────────────────────
+  async saveCurrentFile() {
+    if (!this.currentFile) {
+      this.statusMessage = 'No file open to save.';
+      this.renderIDE();
+      return;
+    }
+
+    try {
+      await axios.post(`${this.backendUrl}/api/codespaces/${this.room}/file`, {
+        fileName: this.currentFile.name,
+        path: this.currentFile.path || '',
+        content: this.currentFile.content || '',
+        language: this.detectLanguage(this.currentFile.name),
+      });
+      this.statusMessage = `[SAVED] '${this.currentFile.name}' saved successfully!`;
+    } catch (err) {
+      this.statusMessage = `Save failed: ${err.message}`;
+    }
+    this.renderIDE();
+  }
+
+  // ── Direct Interactive Inline Write / Paste Mode ('i' to write, 'o' to save) ──
+  async handleDirectInlineEdit() {
+    if (!this.currentFile) {
+      if (this.workspaceFiles.length > 0) {
+        this.currentFile = this.workspaceFiles[0];
+      } else {
+        this.statusMessage = 'Create a file first with [N] before writing.';
+        this.renderIDE();
+        return;
+      }
+    }
+
+    this.isEditing = true;
+    this.statusMessage = `[INSERT MODE] Type or paste text. Press [o] on empty line to SAVE, or [Esc] to cancel.`;
+    this.renderIDE();
+
+    // Prepare buffer of lines from current file content
+    const lines = this.currentFile.content ? this.currentFile.content.split('\n') : [''];
+    let currentLine = '';
+
+    await new Promise((resolve) => {
+      let isPasting = false;
+      let pasteBuffer = '';
+
+      const onData = async (chunk) => {
+        const str = chunk.toString();
+
+        // Check for 'o' or 'O' to save when user presses 'o'
+        // If it's a single keypress 'o' or 'O' (save command)
+        if (str === 'o' || str === 'O') {
+          this.stream.removeListener('data', onData);
+          if (currentLine) {
+            lines.push(currentLine);
+          }
+          this.currentFile.content = lines.join('\n');
+          await this.saveCurrentFile();
+          this.isEditing = false;
+          resolve();
+          return;
+        }
+
+        // Check for Escape to cancel
+        if (str === '\x1b') {
+          this.stream.removeListener('data', onData);
+          this.statusMessage = 'Cancelled editing without saving.';
+          this.isEditing = false;
+          this.renderIDE();
+          resolve();
+          return;
+        }
+
+        // Process characters / pasted text
+        for (let i = 0; i < str.length; i++) {
+          const char = str[i];
+          if (char === '\r' || char === '\n') {
+            lines.push(currentLine);
+            currentLine = '';
+          } else if (char === '\u0008' || char === '\x7f') { // Backspace
+            if (currentLine.length > 0) {
+              currentLine = currentLine.slice(0, -1);
+            } else if (lines.length > 0) {
+              currentLine = lines.pop() || '';
+            }
+          } else if (char >= ' ' && char <= '~') {
+            currentLine += char;
+          }
+        }
+
+        // Live preview in IDE right pane
+        const previewLines = [...lines];
+        if (currentLine) previewLines.push(currentLine);
+        this.currentFile.content = previewLines.join('\n');
+        this.renderIDE();
+      };
+
+      this.stream.on('data', onData);
+    });
+  }
+
+  // ── Paste / Edit File Content (Legacy Prompt) ────────────────────
   async handlePasteIntoCurrentFile() {
     this.isEditing = true;
     this.write('\x1b[?25h');
