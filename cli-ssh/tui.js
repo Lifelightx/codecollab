@@ -35,8 +35,8 @@ class TerminalSession {
     this.backendUrl = backendUrl.replace(/\/+$/, '');
     this.room = options.room || 'general';
     this.running = true;
-    this.token = null;
-    this.user = null;
+    this.token = options.token || null;
+    this.user = options.user || null;
   }
 
   write(text) {
@@ -563,17 +563,18 @@ class TerminalSession {
 
   // ── Local File Upload Guide (Direct SCP) ────────────────────────
   async handleScpGuide() {
+    const userHint = this.user ? this.user.username : '<username>';
     this.writeln(`${C.pink}┌── [ UPLOAD FILES FROM YOUR LOCAL TERMINAL ] ───────────────────────────┐${C.reset}`);
-    this.writeln(`${C.pink}│${C.reset} You can upload any local file (code, PDF, images) directly using SCP!  ${C.pink}│${C.reset}`);
-    this.writeln(`${C.pink}│${C.reset} Open another terminal on your machine and run:                         ${C.pink}│${C.reset}`);
+    this.writeln(`${C.pink}│${C.reset} Upload any local file (code, PDF, images) directly using SCP!          ${C.pink}│${C.reset}`);
+    this.writeln(`${C.pink}│${C.reset} In your local terminal, run SCP with your username:                    ${C.pink}│${C.reset}`);
     this.writeln(`${C.pink}│${C.reset}                                                                        ${C.pink}│${C.reset}`);
-    this.writeln(`${C.pink}│${C.reset}   ${C.bold}${C.green}scp -P 2222 <local-file> jeeban.life:${this.room}/${C.reset}                         ${C.pink}│${C.reset}`);
+    this.writeln(`${C.pink}│${C.reset}   ${C.bold}${C.green}scp -P 2222 <local-file> ${userHint}@jeeban.life:${this.room}/${C.reset}`);
     this.writeln(`${C.pink}│${C.reset}                                                                        ${C.pink}│${C.reset}`);
     this.writeln(`${C.pink}│${C.reset} Examples:                                                              ${C.pink}│${C.reset}`);
-    this.writeln(`${C.pink}│${C.reset}   scp -P 2222 document.pdf jeeban.life:${this.room}/                           ${C.pink}│${C.reset}`);
-    this.writeln(`${C.pink}│${C.reset}   scp -P 2222 main.py jeeban.life:${this.room}/src/                            ${C.pink}│${C.reset}`);
+    this.writeln(`${C.pink}│${C.reset}   scp -P 2222 document.pdf ${userHint}@jeeban.life:${this.room}/`);
+    this.writeln(`${C.pink}│${C.reset}   scp -P 2222 main.py ${userHint}@jeeban.life:${this.room}/src/`);
     this.writeln(`${C.pink}│${C.reset}                                                                        ${C.pink}│${C.reset}`);
-    this.writeln(`${C.pink}│${C.reset} Files are uploaded instantly and appear in your live workspace.        ${C.pink}│${C.reset}`);
+    this.writeln(`${C.pink}│${C.reset} You will be prompted to enter your CodeCollab account password.       ${C.pink}│${C.reset}`);
     this.writeln(`${C.pink}└───────────────────────────────────────────────────────────────────────┘${C.reset}\n`);
 
     await this.prompt('Press [Enter] to return to Main Menu... ');

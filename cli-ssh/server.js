@@ -36,7 +36,14 @@ const hostKey = getOrCreateHostKey();
 const axios = require('axios');
 
 // ── Native SCP File Receiver ──────────────────────────────────────
-async function handleScp(stream, command, backendUrl) {
+async function handleScp(stream, command, backendUrl, authUser, authToken) {
+  if (!authUser || !authToken) {
+    stream.write(Buffer.from('\x02Authentication required to upload files.\nPlease login when prompted or provide valid credentials.\n'));
+    if (typeof stream.exit === 'function') stream.exit(1);
+    stream.end();
+    return;
+  }
+
   const parts = command.split(/\s+/);
   const target = parts[parts.length - 1] || 'general';
   const cleanTarget = target.replace(/^\/+|\/+$/g, '');
@@ -107,24 +114,51 @@ async function handleScp(stream, command, backendUrl) {
           buffer = buffer.slice(currentFile.size + 1);
 
           try {
+            // Upload to storage API with user credentials
+            const FormData = require('form-data');
+            const form = new FormData();
+            form.append('spaceName', room);
+            form.append('files', content, { filename: currentFile.name });
+
+            await axios.post(`${backendUrl}/api/uploads`, form, {
+              headers: {
+                ...form.getHeaders(),
+                Authorization: `Bearer ${authToken}`,
+              },
+            });
+
+            // Also sync into room file tree
             await axios.post(`${backendUrl}/api/codespaces/${room}/file`, {
               fileName: currentFile.name,
               path: folder,
               content: content.toString('utf8'),
-            });
-            console.log(`[SCP] Saved '${currentFile.name}' to '${room}' [folder: '${folder}']`);
+            }).catch(() => {});
+
+            console.log(`[SCP] Uploaded '${currentFile.name}' to '${room}' by user '${authUser.username}'`);
           } catch (e) {
-            console.error(`[SCP] Error saving file: ${e.message}`);
+            console.error(`[SCP] Error saving file: ${e.response?.data?.message || e.message}`);
+            stream.write(Buffer.from(`\x02Upload rejected: ${e.response?.data?.message || e.message}\n`));
+            if (typeof stream.exit === 'function') stream.exit(1);
+            stream.end();
+            return;
           }
 
           state = 'WAIT_HEADER';
           currentFile = null;
           stream.write(Buffer.from([0]));
+          // If transfer is single file, or stream ends, gracefully close
         } else {
           return;
         }
       }
     }
+  });
+
+  stream.on('end', () => {
+    if (typeof stream.exit === 'function') {
+      stream.exit(0);
+    }
+    stream.end();
   });
 }
 
@@ -137,13 +171,83 @@ const server = new Server(
     const clientIp = info.ip || 'unknown';
     console.log(`[SSH] Incoming connection from ${clientIp}:${info.port}`);
 
+    let authUser = null;
+    let authToken = null;
+
     client
-      .on('authentication', (ctx) => {
-        // Accept all authentication methods (none, password, publickey) as guest
-        ctx.accept();
+      .on('authentication', async (ctx) => {
+        const username = (ctx.username || '').trim();
+
+        if (ctx.method === 'none') {
+          // Reject 'none' with supported interactive/password methods
+          return ctx.reject(['keyboard-interactive', 'password']);
+        }
+
+        if (ctx.method === 'keyboard-interactive') {
+          // Provide interactive prompts for username/email and password
+          const prompts = [];
+          if (!username || username === 'root' || username.toLowerCase() === 'guest' || username.includes('@') || username.includes('.')) {
+            prompts.push({ prompt: 'CodeCollab Email or Username: ', echo: true });
+          }
+          prompts.push({ prompt: 'Password: ', echo: false });
+
+          return ctx.prompt(prompts, async (responses) => {
+            let userIdentifier = username;
+            let pass = '';
+
+            if (prompts.length === 2) {
+              userIdentifier = (responses[0] || '').trim();
+              pass = responses[1] || '';
+            } else {
+              pass = responses[0] || '';
+            }
+
+            // Allow empty or guest login only if connecting without credentials for shell
+            if (!userIdentifier || userIdentifier.toLowerCase() === 'guest') {
+              // Guest access allowed for interactive shell
+              authUser = null;
+              authToken = null;
+              return ctx.accept();
+            }
+
+            try {
+              const res = await axios.post(`${BACKEND_URL}/api/auth/login`, {
+                identifier: userIdentifier,
+                password: pass,
+              });
+
+              authUser = res.data.user;
+              authToken = res.data.token;
+              console.log(`[SSH] Authenticated user '${authUser.username}' via keyboard-interactive [IP: ${clientIp}]`);
+              return ctx.accept();
+            } catch (err) {
+              console.warn(`[SSH] Login failed for '${userIdentifier}': ${err.response?.data?.message || err.message}`);
+              return ctx.reject(['keyboard-interactive', 'password']);
+            }
+          });
+        }
+
+        if (ctx.method === 'password') {
+          try {
+            const res = await axios.post(`${BACKEND_URL}/api/auth/login`, {
+              identifier: username,
+              password: ctx.password,
+            });
+
+            authUser = res.data.user;
+            authToken = res.data.token;
+            console.log(`[SSH] Authenticated user '${authUser.username}' [IP: ${clientIp}]`);
+            return ctx.accept();
+          } catch (err) {
+            console.warn(`[SSH] Login failed for '${username}': ${err.response?.data?.message || err.message}`);
+            return ctx.reject(['keyboard-interactive', 'password']);
+          }
+        }
+
+        ctx.reject(['keyboard-interactive', 'password']);
       })
       .on('ready', () => {
-        console.log(`[SSH] Client authenticated: ${clientIp}`);
+        console.log(`[SSH] Client session ready: ${clientIp} (${authUser ? authUser.username : 'Guest'})`);
 
         client.on('session', (accept, reject) => {
           const session = accept();
@@ -165,6 +269,8 @@ const server = new Server(
             const term = new TerminalSession(stream, BACKEND_URL, {
               room: 'general',
               pty: ptyInfo,
+              user: authUser,
+              token: authToken,
             });
             term.runInteractive().catch((err) => {
               console.error(`[SSH] Interactive session error: ${err.message}`);
@@ -177,7 +283,7 @@ const server = new Server(
             const stream = accept();
 
             if (info.command && info.command.startsWith('scp ')) {
-              handleScp(stream, info.command, BACKEND_URL).catch((err) => {
+              handleScp(stream, info.command, BACKEND_URL, authUser, authToken).catch((err) => {
                 console.error(`[SSH] SCP error: ${err.message}`);
                 stream.end();
               });
@@ -186,6 +292,8 @@ const server = new Server(
 
             const term = new TerminalSession(stream, BACKEND_URL, {
               room: 'general',
+              user: authUser,
+              token: authToken,
             });
             term.handlePipedExecution(info.command).catch((err) => {
               console.error(`[SSH] Exec session error: ${err.message}`);
