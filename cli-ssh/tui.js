@@ -282,7 +282,7 @@ class TerminalSession {
         rightLines.push(`  ${C.bold}File Size     :${C.reset} ${((selectedUpload.size || 0) / 1024).toFixed(2)} KB (${selectedUpload.size} Bytes)`);
         rightLines.push(`  ${C.bold}MIME Type     :${C.reset} ${selectedUpload.mimeType || 'application/octet-stream'}`);
         rightLines.push(`  ${C.bold}Uploaded At   :${C.reset} ${new Date(selectedUpload.createdAt).toLocaleString()}`);
-        rightLines.push(`  ${C.bold}Download URL  :${C.reset} ${C.pink}${C.underline}https://jeeban.life/api/uploads/share/${selectedUpload._id}${C.reset}`);
+        rightLines.push(`  ${C.bold}Download URL  :${C.reset} ${C.pink}${C.underline}https://jeeban.life/s/${selectedUpload._id}${C.reset}`);
         rightLines.push(`  ${C.dim}────────────────────────────────────────────────────────────────────────${C.reset}`);
         rightLines.push('');
         rightLines.push(`  ${C.green}${C.bold}[Press ENTER]${C.reset} -> Download this file into your workspace file tree`);
