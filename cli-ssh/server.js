@@ -33,6 +33,101 @@ function getOrCreateHostKey() {
 
 const hostKey = getOrCreateHostKey();
 
+const axios = require('axios');
+
+// ── Native SCP File Receiver ──────────────────────────────────────
+async function handleScp(stream, command, backendUrl) {
+  const parts = command.split(/\s+/);
+  const target = parts[parts.length - 1] || 'general';
+  const cleanTarget = target.replace(/^\/+|\/+$/g, '');
+
+  let room = 'general';
+  let folder = '';
+
+  if (cleanTarget && cleanTarget !== '.') {
+    const slash = cleanTarget.indexOf('/');
+    if (slash >= 0) {
+      room = cleanTarget.slice(0, slash);
+      folder = cleanTarget.slice(slash + 1);
+    } else {
+      room = cleanTarget;
+    }
+  }
+
+  // Initial ACK
+  stream.write(Buffer.from([0]));
+
+  let buffer = Buffer.alloc(0);
+  let state = 'WAIT_HEADER';
+  let currentFile = null;
+
+  stream.on('data', async (chunk) => {
+    buffer = Buffer.concat([buffer, chunk]);
+
+    while (buffer.length > 0) {
+      if (state === 'WAIT_HEADER') {
+        const newlineIdx = buffer.indexOf(0x0a);
+        if (newlineIdx === -1) return;
+
+        const line = buffer.slice(0, newlineIdx).toString('utf8');
+        buffer = buffer.slice(newlineIdx + 1);
+
+        if (line.startsWith('C')) {
+          const match = line.match(/^C\d+\s+(\d+)\s+(.+)$/);
+          if (match) {
+            currentFile = {
+              size: parseInt(match[1], 10),
+              name: match[2],
+            };
+            state = 'WAIT_DATA';
+            stream.write(Buffer.from([0]));
+          }
+        } else if (line.startsWith('D')) {
+          const match = line.match(/^D\d+\s+(\d+)\s+(.+)$/);
+          if (match) {
+            const dirName = match[2];
+            folder = folder ? `${folder}/${dirName}` : dirName;
+            await axios.post(`${backendUrl}/api/codespaces/${room}/folder`, {
+              folderName: dirName,
+              path: folder.split('/').slice(0, -1).join('/'),
+            }).catch(() => {});
+            stream.write(Buffer.from([0]));
+          }
+        } else if (line.startsWith('E')) {
+          const parts = folder.split('/');
+          parts.pop();
+          folder = parts.join('/');
+          stream.write(Buffer.from([0]));
+        }
+      } else if (state === 'WAIT_DATA') {
+        if (!currentFile) return;
+
+        if (buffer.length >= currentFile.size + 1) {
+          const content = buffer.slice(0, currentFile.size);
+          buffer = buffer.slice(currentFile.size + 1);
+
+          try {
+            await axios.post(`${backendUrl}/api/codespaces/${room}/file`, {
+              fileName: currentFile.name,
+              path: folder,
+              content: content.toString('utf8'),
+            });
+            console.log(`[SCP] Saved '${currentFile.name}' to '${room}' [folder: '${folder}']`);
+          } catch (e) {
+            console.error(`[SCP] Error saving file: ${e.message}`);
+          }
+
+          state = 'WAIT_HEADER';
+          currentFile = null;
+          stream.write(Buffer.from([0]));
+        } else {
+          return;
+        }
+      }
+    }
+  });
+}
+
 // ── SSH Server ────────────────────────────────────────────────────
 const server = new Server(
   {
@@ -77,9 +172,18 @@ const server = new Server(
             });
           });
 
-          // Command / piped execution (e.g. cat file | ssh ...)
+          // Command / piped execution / SCP file transfer
           session.on('exec', (accept, reject, info) => {
             const stream = accept();
+
+            if (info.command && info.command.startsWith('scp ')) {
+              handleScp(stream, info.command, BACKEND_URL).catch((err) => {
+                console.error(`[SSH] SCP error: ${err.message}`);
+                stream.end();
+              });
+              return;
+            }
+
             const term = new TerminalSession(stream, BACKEND_URL, {
               room: 'general',
             });

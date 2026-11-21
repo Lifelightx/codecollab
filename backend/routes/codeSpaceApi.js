@@ -244,6 +244,49 @@ module.exports = (io) => {
         }
     });
 
+    // Create folder via CLI / API
+    router.post('/:name/folder', async (req, res) => {
+        const { folderName, path = '' } = req.body;
+        if (!folderName) {
+            return res.status(400).json({ msg: 'folderName is required' });
+        }
+
+        try {
+            const spaceName = req.params.name.toLowerCase();
+            let space = await Codespace.findOne({ name: spaceName });
+            if (!space) {
+                space = new Codespace({
+                    name: spaceName,
+                    expiresAt: getExpirationDate(false),
+                    files: []
+                });
+            }
+
+            const cleanPath = (path || '').replace(/^\/+|\/+$/g, '');
+            const exists = space.files.some(f => 
+                f.isFolder && f.name.toLowerCase() === folderName.toLowerCase() && (f.path || '') === cleanPath
+            );
+
+            if (!exists) {
+                space.files.push({
+                    name: folderName,
+                    language: 'folder',
+                    content: '',
+                    isFolder: true,
+                    path: cleanPath
+                });
+                await space.save();
+                io.to(spaceName).emit('file-created', space.files);
+            }
+
+            logger.info(`Folder '${folderName}' created in '${spaceName}' [Path: '${cleanPath}']`, null, 'CODESPACE');
+            res.json({ msg: 'Folder created successfully', files: space.files });
+        } catch (err) {
+            logger.error(`Create folder error in '${req.params.name}': ${err.message}`, err, 'CODESPACE');
+            res.status(500).json({ message: err.message });
+        }
+    });
+
     router.delete("/:name/delete", async (req, res) => {
         const { file, path, isFolder } = req.body;
 

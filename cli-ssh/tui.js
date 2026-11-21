@@ -68,6 +68,13 @@ class TerminalSession {
     this.writeln();
   }
 
+  // ── Universal Back / Cancel Checker ──────────────────────────────
+  isCancel(val) {
+    if (val === null || val === undefined) return true;
+    const s = val.toString().trim().toLowerCase();
+    return s === '' || s === ':q' || s === 'q' || s === 'cancel' || s === 'back' || s === '__cancel__';
+  }
+
   // ── Interactive Arrow / Tab Menu Selector ───────────────────────
   async selectMenu(items, title = 'Available Commands', initialIndex = 0) {
     this.stream.resume();
@@ -79,7 +86,6 @@ class TerminalSession {
       items.forEach((item, i) => {
         const isSel = i === index;
         if (isSel) {
-          // Highlighted: Pink pointer, Green tag, Bold Pink label with bracket
           out += `  ${C.pink}${C.bold}»${C.reset} ${C.green}${C.bold}[${item.key}]${C.reset} ${C.pink}${C.bold}${item.label}${C.reset}\x1b[K\r\n`;
         } else {
           out += `    ${C.dim}[${item.key}]${C.reset} ${C.grayLight}${item.label}${C.reset}\x1b[K\r\n`;
@@ -89,32 +95,34 @@ class TerminalSession {
     };
 
     this.writeln(`${C.bold}${C.green}${title}:${C.reset}`);
-    this.writeln(`${C.dim}  Navigate: ${C.pink}↑ / ↓${C.dim} or ${C.pink}Tab${C.dim}  |  Select: ${C.green}Enter${C.dim}  |  Direct: [Number Key]${C.reset}\r\n`);
+    this.writeln(`${C.dim}  Navigate: ${C.pink}↑ / ↓${C.dim} or ${C.pink}Tab${C.dim}  |  Select: ${C.green}Enter${C.dim}  |  Back: ${C.yellow}0 / Esc${C.reset}\r\n`);
 
-    // Hide cursor during interactive selection
-    this.write('\x1b[?25l');
+    this.write('\x1b[?25l'); // Hide cursor
     this.write(render());
 
     return new Promise((resolve) => {
       const onData = (chunk) => {
         const key = chunk.toString();
 
-        if (key === '\u001b[A' || key === 'k') { // Up arrow
+        if (key === '\u001b[A' || key === 'k') {
           index = (index - 1 + count) % count;
-        } else if (key === '\u001b[B' || key === 'j') { // Down arrow
+        } else if (key === '\u001b[B' || key === 'j') {
           index = (index + 1) % count;
-        } else if (key === '\t') { // Tab
+        } else if (key === '\t') {
           index = (index + 1) % count;
-        } else if (key === '\u001b[Z') { // Shift + Tab
+        } else if (key === '\u001b[Z') {
           index = (index - 1 + count) % count;
-        } else if (key === '\r' || key === '\n') { // Enter
+        } else if (key === '\r' || key === '\n') {
           cleanup();
           return resolve(items[index].value);
-        } else if (key === '\u0003') { // Ctrl+C
+        } else if (key === '\u001b' || key === 'q' || key === 'Q') {
+          // Esc or 'q' to go back
+          cleanup();
+          return resolve('__cancel__');
+        } else if (key === '\u0003') {
           cleanup();
           return resolve('exit');
         } else {
-          // Direct hotkey matching (e.g. typing '1', '2', '0')
           const trimmed = key.trim().toLowerCase();
           const match = items.findIndex((it) => it.key.toLowerCase() === trimmed);
           if (match >= 0) {
@@ -124,7 +132,6 @@ class TerminalSession {
           return;
         }
 
-        // Reposition cursor back up and redraw menu lines smoothly
         this.write(`\x1b[${count}A\r`);
         this.write(render());
       };
@@ -133,13 +140,14 @@ class TerminalSession {
         this.stream.removeListener('data', onData);
         this.write('\x1b[?25h'); // Restore cursor
         this.writeln();
+        this.stream.resume();
       };
 
       this.stream.on('data', onData);
     });
   }
 
-  // ── Text Prompts ────────────────────────────────────────────────
+  // ── Text Prompts with Instant Back / Cancel Support ───────────────
   async prompt(questionText) {
     this.stream.resume();
     const rl = readline.createInterface({
@@ -149,6 +157,13 @@ class TerminalSession {
     });
 
     return new Promise((resolve) => {
+      rl.on('SIGINT', () => {
+        rl.close();
+        this.stream.resume();
+        this.writeln();
+        resolve('__cancel__');
+      });
+
       rl.question(`${C.green}${questionText}${C.reset}`, (answer) => {
         rl.close();
         this.stream.resume();
@@ -157,44 +172,39 @@ class TerminalSession {
     });
   }
 
-  // Masked secret prompt (prints '*' for passwords without hanging)
+  // Masked secret prompt (Raw character listener: ZERO initial asterisks + Esc/Ctrl+C support)
   async promptSecret(questionText) {
     this.stream.resume();
-    const { Writable } = require('stream');
-    let muted = true;
-
-    const mutableStdout = new Writable({
-      write: (chunk, encoding, callback) => {
-        if (!muted) {
-          this.stream.write(chunk, encoding);
-        } else {
-          const str = chunk.toString();
-          if (str === '\r' || str === '\n') {
-            this.stream.write('\r\n');
-          } else {
-            this.stream.write(`${C.pink}*${C.reset}`);
-          }
-        }
-        callback();
-      }
-    });
-
-    const rl = readline.createInterface({
-      input: this.stream,
-      output: mutableStdout,
-      terminal: true,
-    });
+    this.write(`${C.green}${questionText}${C.reset}`);
 
     return new Promise((resolve) => {
-      muted = false;
-      this.write(`${C.green}${questionText}${C.reset}`);
-      muted = true;
-
-      rl.question('', (answer) => {
-        rl.close();
-        this.stream.resume();
-        resolve((answer || '').trim());
-      });
+      let secret = '';
+      const onData = (chunk) => {
+        const str = chunk.toString();
+        for (let i = 0; i < str.length; i++) {
+          const char = str[i];
+          if (char === '\r' || char === '\n') {
+            this.stream.removeListener('data', onData);
+            this.writeln();
+            this.stream.resume();
+            return resolve(secret.trim());
+          } else if (char === '\u0008' || char === '\x7f') { // Backspace
+            if (secret.length > 0) {
+              secret = secret.slice(0, -1);
+              this.write('\b \b');
+            }
+          } else if (char === '\u0003' || char === '\u001b') { // Ctrl+C or Esc
+            this.stream.removeListener('data', onData);
+            this.writeln();
+            this.stream.resume();
+            return resolve('__cancel__');
+          } else if (char >= ' ' && char <= '~') { // Printable ASCII only
+            secret += char;
+            this.write(`${C.pink}*${C.reset}`);
+          }
+        }
+      };
+      this.stream.on('data', onData);
     });
   }
 
@@ -207,26 +217,26 @@ class TerminalSession {
 
     while (this.running) {
       const menuItems = [
-        { key: '1', label: 'Paste Text / Code Buffer', value: 'paste' },
-        { key: '2', label: 'Upload File to Storage (Requires Login)', value: 'upload' },
-        { key: '3', label: 'List Files in Workspace', value: 'list' },
+        { key: '1', label: 'Paste Code / Create File (With Folder Picker)', value: 'paste' },
+        { key: '2', label: 'Create Folder in Workspace', value: 'create_folder' },
+        { key: '3', label: 'List Workspace Files & Folders', value: 'list' },
         { key: '4', label: 'View File Content', value: 'view' },
         { key: '5', label: 'Switch Active Workspace', value: 'switch' },
+        { key: '6', label: 'Local File Upload Guide (Direct SCP)', value: 'scp_guide' },
       ];
 
       if (!this.user) {
-        menuItems.push({ key: '6', label: 'Log In', value: 'login' });
-        menuItems.push({ key: '7', label: 'Register (New Account)', value: 'register' });
+        menuItems.push({ key: '7', label: 'Log In', value: 'login' });
+        menuItems.push({ key: '8', label: 'Register (New Account)', value: 'register' });
       } else {
-        menuItems.push({ key: '6', label: `Log Out (${this.user.username})`, value: 'logout' });
+        menuItems.push({ key: '7', label: `Log Out (${this.user.username})`, value: 'logout' });
       }
 
-      menuItems.push({ key: '8', label: 'Workspace Access Info', value: 'info' });
+      menuItems.push({ key: '9', label: 'Workspace Access Info', value: 'info' });
       menuItems.push({ key: '0', label: 'Disconnect Session', value: 'exit' });
 
       const choice = await this.selectMenu(menuItems, 'Main Menu', lastSelectedIndex);
 
-      // Track index for next render
       const foundIdx = menuItems.findIndex((m) => m.value === choice);
       if (foundIdx >= 0) lastSelectedIndex = foundIdx;
 
@@ -234,8 +244,8 @@ class TerminalSession {
         case 'paste':
           await this.handlePasteBuffer();
           break;
-        case 'upload':
-          await this.handleFileUpload();
+        case 'create_folder':
+          await this.handleCreateFolder();
           break;
         case 'list':
           await this.handleListFiles();
@@ -245,6 +255,9 @@ class TerminalSession {
           break;
         case 'switch':
           await this.handleSwitchRoom();
+          break;
+        case 'scp_guide':
+          await this.handleScpGuide();
           break;
         case 'login':
           await this.handleLogin();
@@ -256,13 +269,16 @@ class TerminalSession {
           this.handleLogout();
           break;
         case 'info':
-          this.handleShowLink();
+          await this.handleShowLink();
           break;
         case 'exit':
           this.running = false;
           this.writeln(`${C.green}[INFO] Session terminated. Goodbye.${C.reset}`);
           this.stream.end();
           return;
+        case '__cancel__':
+          // Pressed Esc on main menu - remain on menu
+          break;
       }
 
       this.writeln();
@@ -273,17 +289,18 @@ class TerminalSession {
   async handleLogin() {
     this.writeln(`${C.pink}┌── [ USER LOGIN ] ─────────────────────────────────────────────────────┐${C.reset}`);
     this.writeln(`${C.pink}│${C.reset} Enter your CodeCollab credentials to log in.                           ${C.pink}│${C.reset}`);
+    this.writeln(`${C.pink}│${C.reset} Press [Enter] on empty input or type ':q' / [Esc] to go back.          ${C.pink}│${C.reset}`);
     this.writeln(`${C.pink}└───────────────────────────────────────────────────────────────────────┘${C.reset}`);
 
-    const identifier = await this.prompt('Username or Email : ');
-    if (!identifier) {
-      this.writeln(`${C.yellow}[INFO] Login cancelled.${C.reset}\n`);
+    const identifier = await this.prompt('Username or Email (or Enter to go back) : ');
+    if (this.isCancel(identifier)) {
+      this.writeln(`${C.yellow}[INFO] Cancelled. Returned to Main Menu.${C.reset}\n`);
       return false;
     }
 
-    const password = await this.promptSecret('Password          : ');
-    if (!password) {
-      this.writeln(`${C.yellow}[INFO] Login cancelled.${C.reset}\n`);
+    const password = await this.promptSecret('Password (or Enter to go back)          : ');
+    if (this.isCancel(password)) {
+      this.writeln(`${C.yellow}[INFO] Cancelled. Returned to Main Menu.${C.reset}\n`);
       return false;
     }
 
@@ -310,16 +327,27 @@ class TerminalSession {
   async handleRegister() {
     this.writeln(`${C.pink}┌── [ CREATE ACCOUNT ] ─────────────────────────────────────────────────┐${C.reset}`);
     this.writeln(`${C.pink}│${C.reset} Registration requires email verification via a 6-digit code.           ${C.pink}│${C.reset}`);
+    this.writeln(`${C.pink}│${C.reset} Press [Enter] on empty input or type ':q' / [Esc] to go back.          ${C.pink}│${C.reset}`);
     this.writeln(`${C.pink}└───────────────────────────────────────────────────────────────────────┘${C.reset}`);
 
-    const email = await this.prompt('Email Address    : ');
-    if (!email) return;
+    const email = await this.prompt('Email Address (or Enter to go back)    : ');
+    if (this.isCancel(email)) {
+      this.writeln(`${C.yellow}[INFO] Cancelled. Returned to Main Menu.${C.reset}\n`);
+      return;
+    }
 
-    const username = await this.prompt('Choose Username  : ');
-    if (!username) return;
+    const username = await this.prompt('Choose Username (or Enter to go back)  : ');
+    if (this.isCancel(username)) {
+      this.writeln(`${C.yellow}[INFO] Cancelled. Returned to Main Menu.${C.reset}\n`);
+      return;
+    }
 
-    const password = await this.promptSecret('Choose Password  : ');
-    if (!password || password.length < 6) {
+    const password = await this.promptSecret('Choose Password (or Enter to go back)  : ');
+    if (this.isCancel(password)) {
+      this.writeln(`${C.yellow}[INFO] Cancelled. Returned to Main Menu.${C.reset}\n`);
+      return;
+    }
+    if (password.length < 6) {
       this.writeln(`${C.red}[ERROR] Password must be at least 6 characters.${C.reset}\n`);
       return;
     }
@@ -338,9 +366,9 @@ class TerminalSession {
         this.writeln(`${C.yellow}[DEV SIMULATION] Verification OTP: ${otpRes.data.otpPreview}${C.reset}`);
       }
 
-      const otp = await this.prompt('Enter 6-digit code: ');
-      if (!otp) {
-        this.writeln(`${C.yellow}[INFO] Registration cancelled.${C.reset}\n`);
+      const otp = await this.prompt('Enter 6-digit code (or Enter to cancel): ');
+      if (this.isCancel(otp)) {
+        this.writeln(`${C.yellow}[INFO] Registration cancelled. Returned to Main Menu.${C.reset}\n`);
         return;
       }
 
@@ -366,110 +394,138 @@ class TerminalSession {
     this.writeln(`${C.green}[OK] Logged out. Now operating in Guest mode.${C.reset}\n`);
   }
 
-  // ── File Upload via Storage API (Auth Required) ──────────────────
-  async handleFileUpload() {
-    if (!this.user || !this.token) {
-      this.writeln(`${C.yellow}[AUTH REQUIRED] File storage uploads require a signed-in account.${C.reset}`);
-      const doLogin = await this.prompt('Would you like to log in now? [y/N]: ');
-      if (doLogin.toLowerCase() === 'y') {
-        const ok = await this.handleLogin();
-        if (!ok) return;
-      } else {
+  // ── Helper: Discover Workspace Folders ──────────────────────────
+  async getWorkspaceFolders() {
+    try {
+      const res = await axios.get(`${this.backendUrl}/api/codespaces/${this.room}`);
+      const files = res.data?.files || [];
+      const folderSet = new Set();
+      folderSet.add(''); // Root
+
+      files.forEach((f) => {
+        if (f.isFolder && f.name) {
+          const full = f.path ? `${f.path}/${f.name}` : f.name;
+          folderSet.add(full);
+        } else if (f.path) {
+          folderSet.add(f.path);
+        }
+      });
+
+      return Array.from(folderSet).sort();
+    } catch {
+      return [''];
+    }
+  }
+
+  // ── Create Folder in Workspace ──────────────────────────────────
+  async handleCreateFolder() {
+    const folders = await this.getWorkspaceFolders();
+
+    const folderItems = folders.map((f, i) => ({
+      key: `${i + 1}`,
+      label: f ? `/${f}` : `/ (Root directory)`,
+      value: f,
+    }));
+    folderItems.push({ key: '0', label: '< Cancel & Back to Main Menu', value: '__cancel__' });
+
+    const parentFolder = await this.selectMenu(folderItems, 'Select Parent Folder for New Subfolder');
+    if (this.isCancel(parentFolder)) {
+      this.writeln(`${C.yellow}[INFO] Cancelled. Returned to Main Menu.${C.reset}\n`);
+      return;
+    }
+
+    const folderName = await this.prompt('New Folder Name (or Enter to cancel): ');
+    if (this.isCancel(folderName)) {
+      this.writeln(`${C.yellow}[INFO] Cancelled. Returned to Main Menu.${C.reset}\n`);
+      return;
+    }
+    if (!/^[a-zA-Z0-9_.-]+$/.test(folderName)) {
+      this.writeln(`${C.red}[ERROR] Invalid folder name. Use alphanumeric characters, dots or hyphens.${C.reset}\n`);
+      return;
+    }
+
+    this.writeln(`${C.pink}[WAIT] Creating folder '${folderName}' in workspace '${this.room}'...${C.reset}`);
+
+    try {
+      await axios.post(`${this.backendUrl}/api/codespaces/${this.room}/folder`, {
+        folderName,
+        path: parentFolder,
+      });
+
+      const fullPath = parentFolder ? `${parentFolder}/${folderName}` : folderName;
+      this.writeln(`${C.green}[OK] Folder '/${fullPath}' created successfully!${C.reset}\n`);
+    } catch (err) {
+      this.writeln(`${C.red}[ERROR] Failed to create folder: ${err.response?.data?.message || err.message}${C.reset}\n`);
+    }
+  }
+
+  // ── Paste / Create File with Interactive Folder Selection ───────
+  async handlePasteBuffer() {
+    const folders = await this.getWorkspaceFolders();
+
+    const folderItems = folders.map((f, i) => ({
+      key: `${i + 1}`,
+      label: f ? `/${f}` : `/ (Root directory)`,
+      value: f,
+    }));
+    folderItems.push({ key: '+', label: '+ Create New Folder...', value: '__new_folder__' });
+    folderItems.push({ key: '0', label: '< Cancel & Back to Main Menu', value: '__cancel__' });
+
+    let targetFolder = await this.selectMenu(folderItems, 'Select Destination Folder');
+    if (this.isCancel(targetFolder)) {
+      this.writeln(`${C.yellow}[INFO] Cancelled. Returned to Main Menu.${C.reset}\n`);
+      return;
+    }
+
+    if (targetFolder === '__new_folder__') {
+      const newF = await this.prompt('New Folder Name (or Enter to cancel): ');
+      if (this.isCancel(newF)) {
+        this.writeln(`${C.yellow}[INFO] Cancelled. Returned to Main Menu.${C.reset}\n`);
+        return;
+      }
+      try {
+        await axios.post(`${this.backendUrl}/api/codespaces/${this.room}/folder`, { folderName: newF, path: '' });
+        targetFolder = newF;
+        this.writeln(`${C.green}[OK] Created folder '/${newF}'${C.reset}`);
+      } catch (err) {
+        this.writeln(`${C.red}[ERROR] Could not create folder: ${err.message}${C.reset}\n`);
         return;
       }
     }
 
-    this.writeln(`${C.pink}┌── [ FILE UPLOAD ] ────────────────────────────────────────────────────┐${C.reset}`);
-    this.writeln(`${C.pink}│${C.reset} Paste the raw or Base64 content of the file.                          ${C.pink}│${C.reset}`);
-    this.writeln(`${C.pink}│${C.reset} Finish with ${C.bold}:wq${C.reset} on a new line, or ${C.bold}:q!${C.reset} to cancel.                       ${C.pink}│${C.reset}`);
+    const folderDisplay = targetFolder ? `/${targetFolder}/` : '/';
+
+    this.writeln(`${C.pink}┌── [ CREATE / PASTE FILE ] ─────────────────────────────────────────────┐${C.reset}`);
+    this.writeln(`${C.pink}│${C.reset} Destination : ${C.green}${folderDisplay}${C.reset}`);
+    this.writeln(`${C.pink}│${C.reset} Enter file name, then paste or type content.                           ${C.pink}│${C.reset}`);
+    this.writeln(`${C.pink}│${C.reset} Finish by typing ${C.bold}:wq${C.reset} on a new line and press Enter.                      ${C.pink}│${C.reset}`);
+    this.writeln(`${C.pink}│${C.reset} Type ${C.bold}:q${C.reset} on a new line to cancel and go back.                             ${C.pink}│${C.reset}`);
     this.writeln(`${C.pink}└───────────────────────────────────────────────────────────────────────┘${C.reset}`);
 
-    const fileName = await this.prompt('Target file name (e.g. document.pdf, image.png): ');
-    if (!fileName) return;
-
-    this.writeln(`\n${C.green}[INPUT] Paste file contents or Base64 stream (finish with :wq):${C.reset}`);
-
-    const lines = [];
-    const rl = readline.createInterface({ input: this.stream, output: this.stream, terminal: true });
-
-    await new Promise((resolve) => {
-      rl.on('line', (line) => {
-        if (line.trim() === ':wq') {
-          rl.close();
-          resolve();
-        } else if (line.trim() === ':q!') {
-          lines.length = 0;
-          rl.close();
-          resolve();
-        } else {
-          lines.push(line);
-        }
-      });
-    });
-    this.stream.resume();
-
-    if (lines.length === 0) {
-      this.writeln(`${C.yellow}[INFO] Upload cancelled or empty buffer.${C.reset}\n`);
+    let fileName = await this.prompt(`File Name (or :q to cancel) [default: snippet.txt]: `);
+    if (fileName === ':q' || fileName.toLowerCase() === 'cancel' || fileName === '__cancel__') {
+      this.writeln(`${C.yellow}[INFO] Cancelled. Returned to Main Menu.${C.reset}\n`);
       return;
     }
-
-    const rawData = lines.join('\n');
-    let fileBuffer;
-    const isBase64 = /^[A-Za-z0-9+/=\s]+$/.test(rawData) && rawData.length % 4 === 0 && !rawData.includes(' ');
-    if (isBase64) {
-      fileBuffer = Buffer.from(rawData.replace(/\s+/g, ''), 'base64');
-    } else {
-      fileBuffer = Buffer.from(rawData, 'utf8');
-    }
-
-    this.writeln(`${C.pink}[WAIT] Uploading ${fileBuffer.length} bytes to workspace '${this.room}'...${C.reset}`);
-
-    try {
-      const form = new FormData();
-      form.append('spaceName', this.room);
-      form.append('files', fileBuffer, { filename: fileName });
-
-      const res = await axios.post(`${this.backendUrl}/api/uploads`, form, {
-        headers: {
-          ...form.getHeaders(),
-          Authorization: `Bearer ${this.token}`,
-        },
-      });
-
-      const uploaded = res.data?.uploads?.[0];
-      this.writeln(`${C.green}[OK] File '${fileName}' uploaded successfully!${C.reset}`);
-      if (uploaded) {
-        this.writeln(`  File ID     : ${uploaded._id}`);
-        this.writeln(`  Direct Link : ${C.green}${C.underline}https://jeeban.life/s/${uploaded._id}${C.reset}`);
-      }
-      this.writeln();
-    } catch (err) {
-      this.writeln(`${C.red}[ERROR] Upload failed: ${err.response?.data?.message || err.message}${C.reset}\n`);
-    }
-  }
-
-  // ── Quick Paste Buffer (Works for both Guests and Auth) ───────────
-  async handlePasteBuffer() {
-    this.writeln(`${C.pink}┌── [ PASTE BUFFER ] ───────────────────────────────────────────────────┐${C.reset}`);
-    this.writeln(`${C.pink}│${C.reset} Paste your code/text snippet below.                                    ${C.pink}│${C.reset}`);
-    this.writeln(`${C.pink}│${C.reset} To save: Type ${C.bold}:wq${C.reset} on a new line and press Enter.                       ${C.pink}│${C.reset}`);
-    this.writeln(`${C.pink}│${C.reset} To cancel: Type ${C.bold}:q!${C.reset} on a new line.                                     ${C.pink}│${C.reset}`);
-    this.writeln(`${C.pink}└───────────────────────────────────────────────────────────────────────┘${C.reset}`);
-
-    let fileName = await this.prompt(`File name [default: snippet.txt]: `);
     if (!fileName) fileName = 'snippet.txt';
 
-    this.writeln(`\n${C.green}[INPUT] Paste content below (finish with :wq):${C.reset}`);
+    this.writeln(`\n${C.green}[INPUT] Paste content below (finish with :wq, or :q to cancel):${C.reset}`);
 
     const lines = [];
     const rl = readline.createInterface({ input: this.stream, output: this.stream, terminal: true });
 
     await new Promise((resolve) => {
+      rl.on('SIGINT', () => {
+        lines.length = 0;
+        rl.close();
+        resolve();
+      });
+
       rl.on('line', (line) => {
         if (line.trim() === ':wq') {
           rl.close();
           resolve();
-        } else if (line.trim() === ':q!') {
+        } else if (line.trim() === ':q!' || line.trim() === ':q') {
           lines.length = 0;
           rl.close();
           resolve();
@@ -478,29 +534,49 @@ class TerminalSession {
         }
       });
     });
+
     this.stream.resume();
 
     if (lines.length === 0) {
-      this.writeln(`${C.yellow}[INFO] Buffer empty or cancelled. Nothing saved.${C.reset}\n`);
+      this.writeln(`${C.yellow}[INFO] Cancelled or empty buffer. Nothing saved.${C.reset}\n`);
       return;
     }
 
     const content = lines.join('\n');
-    this.writeln(`${C.pink}[WAIT] Saving '${fileName}' to workspace '${this.room}'...${C.reset}`);
+    this.writeln(`${C.pink}[WAIT] Saving '${fileName}' to '${folderDisplay}'...${C.reset}`);
 
     try {
       await axios.post(`${this.backendUrl}/api/codespaces/${this.room}/file`, {
         fileName,
+        path: targetFolder,
         content,
         language: this.detectLanguage(fileName),
       });
 
-      this.writeln(`${C.green}[OK] File '${fileName}' successfully synced!${C.reset}`);
-      this.writeln(`Bytes written: ${Buffer.byteLength(content, 'utf8')} B`);
-      this.writeln(`Live View    : ${C.green}${C.underline}https://jeeban.life/${this.room}${C.reset}\n`);
+      this.writeln(`${C.green}[OK] File '${folderDisplay}${fileName}' successfully saved!${C.reset}`);
+      this.writeln(`Bytes written : ${Buffer.byteLength(content, 'utf8')} B`);
+      this.writeln(`Live View     : ${C.green}${C.underline}https://jeeban.life/${this.room}${C.reset}\n`);
     } catch (err) {
       this.writeln(`${C.red}[ERROR] Failed to save file: ${err.response?.data?.message || err.message}${C.reset}\n`);
     }
+  }
+
+  // ── Local File Upload Guide (Direct SCP) ────────────────────────
+  async handleScpGuide() {
+    this.writeln(`${C.pink}┌── [ UPLOAD FILES FROM YOUR LOCAL TERMINAL ] ───────────────────────────┐${C.reset}`);
+    this.writeln(`${C.pink}│${C.reset} You can upload any local file (code, PDF, images) directly using SCP!  ${C.pink}│${C.reset}`);
+    this.writeln(`${C.pink}│${C.reset} Open another terminal on your machine and run:                         ${C.pink}│${C.reset}`);
+    this.writeln(`${C.pink}│${C.reset}                                                                        ${C.pink}│${C.reset}`);
+    this.writeln(`${C.pink}│${C.reset}   ${C.bold}${C.green}scp -P 2222 <local-file> jeeban.life:${this.room}/${C.reset}                         ${C.pink}│${C.reset}`);
+    this.writeln(`${C.pink}│${C.reset}                                                                        ${C.pink}│${C.reset}`);
+    this.writeln(`${C.pink}│${C.reset} Examples:                                                              ${C.pink}│${C.reset}`);
+    this.writeln(`${C.pink}│${C.reset}   scp -P 2222 document.pdf jeeban.life:${this.room}/                           ${C.pink}│${C.reset}`);
+    this.writeln(`${C.pink}│${C.reset}   scp -P 2222 main.py jeeban.life:${this.room}/src/                            ${C.pink}│${C.reset}`);
+    this.writeln(`${C.pink}│${C.reset}                                                                        ${C.pink}│${C.reset}`);
+    this.writeln(`${C.pink}│${C.reset} Files are uploaded instantly and appear in your live workspace.        ${C.pink}│${C.reset}`);
+    this.writeln(`${C.pink}└───────────────────────────────────────────────────────────────────────┘${C.reset}\n`);
+
+    await this.prompt('Press [Enter] to return to Main Menu... ');
   }
 
   async handleListFiles() {
@@ -518,7 +594,7 @@ class TerminalSession {
       this.writeln();
       this.writeln(`${C.bold}${C.green}Workspace: ${this.room} (${files.length} item${files.length === 1 ? '' : 's'})${C.reset}`);
       this.writeln(`${C.dim}------------------------------------------------------------------------${C.reset}`);
-      this.writeln(`  ${C.pink}${'NAME'.padEnd(28)}${C.reset} ${C.pink}${'TYPE'.padEnd(10)}${C.reset} ${C.pink}${'SIZE'.padEnd(12)}${C.reset} ${C.pink}${'PATH'}${C.reset}`);
+      this.writeln(`  ${C.pink}${'NAME'.padEnd(28)}${C.reset} ${C.pink}${'TYPE'.padEnd(10)}${C.reset} ${C.pink}${'SIZE'.padEnd(12)}${C.reset} ${C.pink}${'FOLDER'}${C.reset}`);
       this.writeln(`${C.dim}------------------------------------------------------------------------${C.reset}`);
 
       files.forEach((f) => {
@@ -528,6 +604,8 @@ class TerminalSession {
         this.writeln(`  ${f.name.padEnd(28)} ${type.padEnd(10)} ${size.padEnd(12)} ${pathStr}`);
       });
       this.writeln(`${C.dim}------------------------------------------------------------------------${C.reset}\n`);
+
+      await this.prompt('Press [Enter] to return to Main Menu... ');
     } catch (err) {
       this.writeln(`${C.red}[ERROR] Failed to fetch workspace: ${err.response?.data?.msg || err.message}${C.reset}\n`);
     }
@@ -544,43 +622,52 @@ class TerminalSession {
         return;
       }
 
-      // Build interactive file picker menu
-      const fileMenuItems = files.map((f, i) => ({
-        key: `${i + 1}`,
-        label: `${f.name.padEnd(24)} (${f.language || 'text'}, ${Buffer.byteLength(f.content || '', 'utf8')} B)`,
-        value: f.name,
-      }));
-      fileMenuItems.push({ key: '0', label: '< Cancel & Back', value: '__cancel__' });
+      const fileMenuItems = files.map((f, i) => {
+        const p = f.path ? `/${f.path}/` : '/';
+        return {
+          key: `${i + 1}`,
+          label: `${(p + f.name).padEnd(26)} (${Buffer.byteLength(f.content || '', 'utf8')} B)`,
+          value: f,
+        };
+      });
+      fileMenuItems.push({ key: '0', label: '< Cancel & Back to Main Menu', value: '__cancel__' });
 
-      const chosenName = await this.selectMenu(fileMenuItems, 'Select File to View');
-      if (!chosenName || chosenName === '__cancel__') return;
+      const chosenFile = await this.selectMenu(fileMenuItems, 'Select File to View');
+      if (this.isCancel(chosenFile) || chosenFile === '__cancel__') return;
 
-      const file = files.find((f) => f.name.toLowerCase() === chosenName.toLowerCase());
-      if (file) {
-        this.writeln(`\n${C.pink}─── [ ${file.name} ] (${file.language || 'text'}) ───────────────────────────────────────────${C.reset}`);
-        this.writeln(file.content || `${C.dim}(Empty file)${C.reset}`);
-        this.writeln(`${C.pink}─── [ END OF FILE ] ────────────────────────────────────────────────────────${C.reset}\n`);
-      }
+      const p = chosenFile.path ? `/${chosenFile.path}/` : '/';
+      this.writeln(`\n${C.pink}─── [ ${p}${chosenFile.name} ] (${chosenFile.language || 'text'}) ───────────────────────────────${C.reset}`);
+      this.writeln(chosenFile.content || `${C.dim}(Empty file)${C.reset}`);
+      this.writeln(`${C.pink}─── [ END OF FILE ] ────────────────────────────────────────────────────────${C.reset}\n`);
+
+      await this.prompt('Press [Enter] to return to Main Menu... ');
     } catch (err) {
       this.writeln(`${C.red}[ERROR] Could not read file: ${err.message}${C.reset}\n`);
     }
   }
 
   async handleSwitchRoom() {
-    const newRoom = await this.prompt(`Enter workspace name [current: ${this.room}]: `);
-    if (newRoom && /^[a-zA-Z0-9_-]+$/.test(newRoom)) {
+    const newRoom = await this.prompt(`Enter workspace name (or Enter to cancel) [current: ${this.room}]: `);
+    if (this.isCancel(newRoom)) {
+      this.writeln(`${C.yellow}[INFO] Cancelled. Returned to Main Menu.${C.reset}\n`);
+      return;
+    }
+
+    if (/^[a-zA-Z0-9_-]+$/.test(newRoom)) {
       this.room = newRoom.toLowerCase();
       this.writeln(`${C.green}[OK] Switched active workspace to: ${this.room}${C.reset}`);
       this.writeln(`Web URL: ${C.green}${C.underline}https://jeeban.life/${this.room}${C.reset}\n`);
-    } else if (newRoom) {
+    } else {
       this.writeln(`${C.red}[ERROR] Invalid name. Use letters, numbers, hyphens, and underscores only.${C.reset}\n`);
     }
   }
 
-  handleShowLink() {
+  async handleShowLink() {
     this.writeln(`${C.bold}${C.green}Workspace Access Info:${C.reset}`);
     this.writeln(`  Direct URL : ${C.pink}${C.underline}https://jeeban.life/${this.room}${C.reset}`);
     this.writeln(`  CLI Access : ${C.green}ssh -p 2222 jeeban.life${C.reset}\n`);
+
+    await this.prompt('Press [Enter] to return to Main Menu... ');
   }
 
   detectLanguage(filename) {
@@ -600,10 +687,12 @@ class TerminalSession {
     const args = (commandString || '').split(/\s+/);
     let targetRoom = this.room;
     let targetFile = `upload_${Date.now()}.txt`;
+    let targetPath = '';
 
     for (let i = 0; i < args.length; i++) {
       if (args[i] === '--room' && args[i + 1]) targetRoom = args[i + 1];
       if (args[i] === '--file' && args[i + 1]) targetFile = args[i + 1];
+      if (args[i] === '--path' && args[i + 1]) targetPath = args[i + 1];
     }
 
     const chunks = [];
@@ -621,6 +710,7 @@ class TerminalSession {
       try {
         await axios.post(`${this.backendUrl}/api/codespaces/${targetRoom}/file`, {
           fileName: targetFile,
+          path: targetPath,
           content,
           language: this.detectLanguage(targetFile),
         });
