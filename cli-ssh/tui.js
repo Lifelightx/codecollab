@@ -2,7 +2,7 @@ const axios = require('axios');
 const readline = require('readline');
 const FormData = require('form-data');
 
-// ANSI formatting helpers - Cyber Pink & Neon Green Theme (Zero emojis)
+// ANSI formatting helpers - Matches user's bash prompt theme (Teal / Cyan & Blue)
 const C = {
   reset: '\x1b[0m',
   bold: '\x1b[1m',
@@ -10,26 +10,25 @@ const C = {
   italic: '\x1b[3m',
   underline: '\x1b[4m',
 
-  // Cyber Pink
-  pink: '\x1b[38;5;206m',        // Vibrant Pink
-  pinkBright: '\x1b[38;5;213m',  // Bright Neon Pink
-  pinkBg: '\x1b[48;5;198m',      // Pink Background
+  // Primary: Mint Green / Teal (matches "jeebanjyoti.mallik@apmosys.mahape")
+  green: '\x1b[38;5;49m',        // Bright Mint / Teal
+  greenBright: '\x1b[38;5;50m',  // Electric Mint
+  greenBg: '\x1b[48;5;36m',      // Teal Background
 
-  // Neon Green
-  green: '\x1b[38;5;48m',        // Neon Emerald Green
-  greenBright: '\x1b[38;5;49m',  // Bright Green
-  greenDim: '\x1b[38;5;29m',     // Dark Emerald
-  greenBg: '\x1b[48;5;35m',      // Green Background
+  // Accent: Sky Blue / Steel Blue (matches "rnd/codecollab$")
+  blue: '\x1b[38;5;39m',         // Vibrant Blue / Steel Cyan
+  blueBright: '\x1b[38;5;45m',   // Bright Sky Blue
+  blueBg: '\x1b[48;5;33m',       // Blue Background
 
-  // Utility colors
+  // Aliases for compatibility
+  pink: '\x1b[38;5;39m',         // Replaced with Blue/Cyan
+  pinkBright: '\x1b[38;5;45m',
+  pinkBg: '\x1b[48;5;33m',
+
+  // Neutral
   white: '\x1b[97m',
   gray: '\x1b[90m',
   grayLight: '\x1b[37m',
-  grayDark: '\x1b[38;5;238m',
-  red: '\x1b[38;5;196m',
-  yellow: '\x1b[38;5;220m',
-  cyan: '\x1b[38;5;51m',
-  bgDark: '\x1b[48;5;235m',
 };
 
 class TerminalSession {
