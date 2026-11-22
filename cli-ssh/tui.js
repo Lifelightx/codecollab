@@ -230,7 +230,7 @@ class TerminalSession {
       }
       leftLines.push('');
       leftLines.push(` [i] Insert/Write`);
-      leftLines.push(` [o] Save Changes`);
+      leftLines.push(` [^O] Save File`);
       leftLines.push(` [N] + New File`);
       leftLines.push(` [D] Delete File`);
     } else {
@@ -316,8 +316,8 @@ class TerminalSession {
     // ── 5. Status / Command Bar ────────────────────────────────────
     out += `${C.green}${'─'.repeat(cols)}${C.reset}\x1b[K\r\n`;
     const navHelp = this.isEditing
-      ? ` [INSERT MODE] Type or paste text | Press [o] to SAVE | Press [Esc] to CANCEL`
-      : ` [↑/↓] Select File | [i] Write/Paste | [o] Save | [Tab] Switch Tab | [N] New | [S] Space | [Q] Exit`;
+      ? ` [INSERT MODE] Type or paste | [Ctrl+O] to SAVE | [Esc] to CANCEL`
+      : ` [↑/↓] Select File | [i] Write/Paste | [Ctrl+O] Save | [Tab] Switch Tab | [N] New | [S] Space | [Q] Exit`;
     out += `${C.dim}${navHelp}\x1b[K\r\n`;
     out += `${C.pink}STATUS:${C.reset} ${C.greenBright}${this.statusMessage}${C.reset}\x1b[K`;
 
@@ -407,7 +407,7 @@ class TerminalSession {
           if (this.activeTab === 'files') {
             await this.handleDirectInlineEdit();
           }
-        } else if (key === 'o' || key === 'O') { // 'o' -> Save directly
+        } else if (key === '\x0f') { // Ctrl+O (0x0F) -> Save directly
           if (this.activeTab === 'files' && this.currentFile) {
             await this.saveCurrentFile();
           }
@@ -522,7 +522,7 @@ class TerminalSession {
     }
 
     this.isEditing = true;
-    this.statusMessage = `[INSERT MODE] Type or paste text. Press [o] on empty line to SAVE, or [Esc] to cancel.`;
+    this.statusMessage = `[INSERT MODE] Type or paste text. Press [Ctrl+O] to SAVE, or [Esc] to cancel.`;
     this.renderIDE();
 
     // Prepare buffer of lines from current file content
@@ -530,15 +530,11 @@ class TerminalSession {
     let currentLine = '';
 
     await new Promise((resolve) => {
-      let isPasting = false;
-      let pasteBuffer = '';
-
       const onData = async (chunk) => {
         const str = chunk.toString();
 
-        // Check for 'o' or 'O' to save when user presses 'o'
-        // If it's a single keypress 'o' or 'O' (save command)
-        if (str === 'o' || str === 'O') {
+        // Check for Ctrl+O (\x0f) to save
+        if (str === '\x0f') {
           this.stream.removeListener('data', onData);
           if (currentLine) {
             lines.push(currentLine);
@@ -560,10 +556,20 @@ class TerminalSession {
           return;
         }
 
-        // Process characters / pasted text
+        // Process characters / pasted text (allows typing 'o' and 'O' normally!)
         for (let i = 0; i < str.length; i++) {
           const char = str[i];
-          if (char === '\r' || char === '\n') {
+          if (char === '\x0f') { // Ctrl+O inside multi-character chunk
+            this.stream.removeListener('data', onData);
+            if (currentLine) {
+              lines.push(currentLine);
+            }
+            this.currentFile.content = lines.join('\n');
+            await this.saveCurrentFile();
+            this.isEditing = false;
+            resolve();
+            return;
+          } else if (char === '\r' || char === '\n') {
             lines.push(currentLine);
             currentLine = '';
           } else if (char === '\u0008' || char === '\x7f') { // Backspace
