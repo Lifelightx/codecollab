@@ -255,23 +255,22 @@ const server = new Server(
       .on('authentication', async (ctx) => {
         const username = (ctx.username || '').trim();
 
-        // 1. If connecting with method 'none':
-        // When running `ssh -p 2222 jeeban.life`, OpenSSH sends the local system username
-        // (e.g. 'jeebanjyoti.mallik@apmosys.mahape'). If no explicit CodeCollab email/user was specified,
-        // we accept on 'none' so the user directly enters the interactive TUI without being prompted!
-        // Only if a specific user requested authentication (like an email or registered username with @ or -u)
-        // or during SCP/non-interactive, keyboard-interactive is triggered.
+        // If client connects with method 'none':
+        // 1. If username was provided by command line (e.g. `scp -P 2222 file user@host:room` or `ssh user@host`),
+        //    or if connecting without an interactive pseudo-terminal, we challenge with 'keyboard-interactive'.
+        // 2. Only if connecting for interactive shell without custom user do we accept 'none'.
+        // To support `scp -P 2222 file jeeban.life:room/` asking for Email & Password:
+        // When OpenSSH runs scp, it requests keyboard-interactive if 'none' is rejected with ['keyboard-interactive'].
+        // For `ssh -p 2222 jeeban.life`, OpenSSH requests a shell afterwards, so if we prompt, the user can just press Enter for guest!
         if (ctx.method === 'none') {
-          // If the username looks like a local system account or guest/empty, let them straight into the TUI
-          // CodeCollab users either log in via TUI or authenticate explicitly with password
-          return ctx.accept();
+          return ctx.reject(['keyboard-interactive', 'password']);
         }
 
-        // 2. Keyboard-Interactive Auth (used when explicit authentication is requested)
+        // 2. Keyboard-Interactive Auth (Prompts for Email/Username & Password)
         if (ctx.method === 'keyboard-interactive') {
           const prompts = [];
           if (!username || username === 'root' || username.toLowerCase() === 'guest' || username.includes('@') || username.includes('.')) {
-            prompts.push({ prompt: 'CodeCollab Email or Username: ', echo: true });
+            prompts.push({ prompt: 'CodeCollab Email or Username (Enter for Guest): ', echo: true });
           }
           prompts.push({ prompt: 'Password: ', echo: false });
 
@@ -286,6 +285,7 @@ const server = new Server(
               pass = responses[0] || '';
             }
 
+            // Allow empty or guest login for interactive shell
             if (!userIdentifier || userIdentifier.toLowerCase() === 'guest') {
               authUser = null;
               authToken = null;
