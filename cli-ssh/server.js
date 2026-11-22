@@ -342,6 +342,7 @@ const server = new Server(
         client.on('session', (accept, reject) => {
           const session = accept();
           let ptyInfo = null;
+          let activeTerm = null;
 
           session.on('pty', (accept, reject, info) => {
             ptyInfo = info;
@@ -350,6 +351,9 @@ const server = new Server(
 
           session.on('window-change', (accept, reject, info) => {
             ptyInfo = info;
+            if (activeTerm && typeof activeTerm.handleResize === 'function') {
+              activeTerm.handleResize(info);
+            }
             if (accept) accept();
           });
 
@@ -362,6 +366,7 @@ const server = new Server(
               user: authUser,
               token: authToken,
             });
+            activeTerm = term;
             term.runInteractive().catch((err) => {
               console.error(`[SSH] Interactive session error: ${err.message}`);
               stream.end();

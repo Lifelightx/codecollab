@@ -1,8 +1,7 @@
 const axios = require('axios');
 const readline = require('readline');
-const FormData = require('form-data');
 
-// ANSI formatting helpers - Matches user's bash prompt theme (Teal / Cyan & Blue)
+// ── Color Theme (Deep Plum / Rose / Berry aesthetic matching reference) ─────────
 const C = {
   reset: '\x1b[0m',
   bold: '\x1b[1m',
@@ -10,27 +9,181 @@ const C = {
   italic: '\x1b[3m',
   underline: '\x1b[4m',
 
-  // Primary: Mint Green / Teal (matches "jeebanjyoti.mallik@apmosys.mahape")
-  green: '\x1b[38;5;49m',        // Bright Mint / Teal
-  greenBright: '\x1b[38;5;50m',  // Electric Mint
-  greenBg: '\x1b[48;5;36m',      // Teal Background
+  // Borders & Headers (Rose / Magenta)
+  rose: '\x1b[38;2;218;75;125m',         // #da4b7d Box borders
+  roseBright: '\x1b[38;2;255;107;157m',   // #ff6b9d Section headers & highlights
+  roseDim: '\x1b[38;2;170;55;95m',        // Dim rose
 
-  // Accent: Sky Blue / Steel Blue (matches "rnd/codecollab$")
-  blue: '\x1b[38;5;39m',         // Vibrant Blue / Steel Cyan
-  blueBright: '\x1b[38;5;45m',   // Bright Sky Blue
-  blueBg: '\x1b[48;5;33m',       // Blue Background
+  // Active Row Highlight (Deep Berry / Plum)
+  selectBg: '\x1b[48;2;120;32;75m',       // #78204b Berry background
+  selectFg: '\x1b[1m\x1b[97m',            // Crisp bold white
+
+  // Text Colors
+  textMain: '\x1b[38;2;240;230;236m',     // #f0e6ec Crisp light text
+  textMuted: '\x1b[38;2;140;110;134m',    // #8c6e86 Dusky mauve / gray
+  textDim: '\x1b[38;2;105;80;100m',       // #695064 Deep mauve for line numbers / comments
+
+  // Syntax & Badge Accents
+  blue: '\x1b[38;2;112;161;255m',         // #70a1ff Soft blue
+  cyan: '\x1b[38;2;0;191;255m',           // #00bfff Bright sky blue / cyan
+  mint: '\x1b[38;2;46;213;115m',          // #2ed573 Mint green (success / online)
+  amber: '\x1b[38;2;243;156;18m',         // #f39c12 Amber / warning
+  red: '\x1b[38;2;255;71;87m',            // #ff4757 Red / error
 
   // Aliases for compatibility
-  pink: '\x1b[38;5;39m',         // Replaced with Blue/Cyan
-  pinkBright: '\x1b[38;5;45m',
-  pinkBg: '\x1b[48;5;33m',
-
-  // Neutral
+  green: '\x1b[38;2;46;213;115m',
+  greenBright: '\x1b[38;2;46;213;115m',
+  pink: '\x1b[38;2;218;75;125m',
+  pinkBright: '\x1b[38;2;255;107;157m',
+  pinkBg: '\x1b[48;2;120;32;75m',
   white: '\x1b[97m',
-  gray: '\x1b[90m',
-  grayLight: '\x1b[37m',
+  gray: '\x1b[38;2;140;110;134m',
+  grayLight: '\x1b[38;2;200;190;198m',
 };
 
+// ── String & ANSI Helpers ──────────────────────────────────────────────────
+function stripAnsi(str) {
+  return (str || '')
+    .replace(/\x1b\[[0-9;]*[a-zA-Z]/g, '')
+    .replace(/\x1b\]52;[^\x07]*\x07/g, '');
+}
+
+function visibleLength(str) {
+  return stripAnsi(str).length;
+}
+
+function fitToWidth(str, width) {
+  const plain = stripAnsi(str);
+  if (plain.length === width) return str;
+  if (plain.length < width) {
+    return str + ' '.repeat(width - plain.length);
+  }
+
+  let curLen = 0;
+  let result = '';
+  let inEscape = false;
+  let escapeSeq = '';
+
+  for (let i = 0; i < str.length; i++) {
+    const char = str[i];
+    if (char === '\x1b') {
+      inEscape = true;
+      escapeSeq = char;
+      continue;
+    }
+    if (inEscape) {
+      escapeSeq += char;
+      if (/[a-zA-Z]/.test(char)) {
+        inEscape = false;
+        result += escapeSeq;
+      }
+      continue;
+    }
+    if (curLen < width - 1) {
+      result += char;
+      curLen++;
+    } else if (curLen === width - 1) {
+      result += '…';
+      curLen++;
+      break;
+    }
+  }
+  if (curLen < width) {
+    result += ' '.repeat(width - curLen);
+  }
+  return result + C.reset;
+}
+
+function formatSize(bytes) {
+  if (!bytes || bytes <= 0) return '0 B';
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} kB`;
+  return `${(bytes / (1024 * 1024)).toFixed(2)} MB`;
+}
+
+function formatTimeAgo(dateInput) {
+  if (!dateInput) return '-';
+  const diffSec = Math.floor((Date.now() - new Date(dateInput).getTime()) / 1000);
+  if (diffSec < 60) return `${diffSec}s ago`;
+  const diffMin = Math.floor(diffSec / 60);
+  if (diffMin < 60) return `${diffMin}m ago`;
+  const diffHour = Math.floor(diffMin / 60);
+  if (diffHour < 24) return `${diffHour}h ago`;
+  const diffDay = Math.floor(diffHour / 24);
+  if (diffDay < 30) return `${diffDay}d ago`;
+  const diffMo = Math.floor(diffDay / 30);
+  return `${diffMo}mo ago`;
+}
+
+function copyToClipboard(stream, text) {
+  if (!stream || !stream.writable) return;
+  const b64 = Buffer.from(text, 'utf8').toString('base64');
+  stream.write(`\x1b]52;c;${b64}\x07`);
+}
+
+function highlightSyntax(codeLine) {
+  if (/^\s*(\/\/|#|\/\*)/.test(codeLine)) {
+    return `${C.textDim}${codeLine}${C.reset}`;
+  }
+
+  let line = codeLine;
+  // Strings
+  line = line.replace(/(["'`])(?:(?=(\\?))\2.)*?\1/g, (m) => `${C.mint}${m}${C.textMain}`);
+  // Keywords
+  const keywords = /\b(const|let|var|function|return|if|else|for|while|class|import|from|export|use|fn|pub|mod|struct|enum|impl|def|async|await|try|catch|new|type|interface|package)\b/g;
+  line = line.replace(keywords, (m) => `${C.roseBright}${m}${C.textMain}`);
+  // Types
+  const types = /\b(string|number|boolean|any|void|int|float|PathBuf|Error|self|this|true|false|null|undefined|None)\b/g;
+  line = line.replace(types, (m) => `${C.blue}${m}${C.textMain}`);
+  // Calls
+  line = line.replace(/\b([a-zA-Z0-9_]+!|\b[a-zA-Z0-9_]+(?=\())\b/g, (m) => `${C.cyan}${m}${C.textMain}`);
+
+  return `${C.textMain}${line}${C.reset}`;
+}
+
+// ── Box Border Drawing ─────────────────────────────────────────────────────
+function renderBoxTop(title, width) {
+  const plainTitle = stripAnsi(title);
+  if (!plainTitle) {
+    return `${C.rose}╭${'─'.repeat(Math.max(0, width - 2))}╮${C.reset}`;
+  }
+  const titleVis = plainTitle.length;
+  const fill = Math.max(0, width - 2 - (titleVis + 3));
+  return `${C.rose}╭─ ${title} ${C.reset}${C.rose}${'─'.repeat(fill)}╮${C.reset}`;
+}
+
+function wrapCommand(cmd, maxWidth) {
+  if (!cmd || cmd.length <= maxWidth) return [cmd || ''];
+  const parts = [];
+  let remaining = cmd;
+  const maxIterations = 20;
+  let iter = 0;
+
+  while (remaining.length > maxWidth && iter < maxIterations) {
+    iter++;
+    let splitIdx = remaining.lastIndexOf(' ', maxWidth - 2);
+    if (splitIdx <= 2) {
+      splitIdx = Math.max(1, maxWidth - 2);
+    }
+    parts.push(remaining.slice(0, splitIdx) + ' \\');
+    remaining = '  ' + remaining.slice(splitIdx).trimStart();
+  }
+  if (remaining.trim()) {
+    parts.push(remaining);
+  }
+  return parts;
+}
+
+function renderBoxBottom(width) {
+  return `${C.rose}╰${'─'.repeat(Math.max(0, width - 2))}╯${C.reset}`;
+}
+
+function renderBoxRow(content, width) {
+  const inner = fitToWidth(content, Math.max(0, width - 2));
+  return `${C.rose}│${C.reset}${inner}${C.rose}│${C.reset}`;
+}
+
+// ── Main TerminalSession Class ─────────────────────────────────────────────
 class TerminalSession {
   constructor(stream, backendUrl, options = {}) {
     this.stream = stream;
@@ -43,14 +196,16 @@ class TerminalSession {
 
     // IDE State
     this.activeTab = 'files'; // 'files' | 'uploads'
-    this.focusArea = 'sidebar'; // 'tabs' | 'sidebar' | 'editor'
     this.selectedFileIndex = 0;
     this.selectedUploadIndex = 0;
+    this.fileScrollOffset = 0;
+    this.uploadScrollOffset = 0;
     this.editorScrollOffset = 0;
+
     this.workspaceFiles = [];
     this.workspaceUploads = [];
-    this.currentFile = null; // Currently opened file in editor
-    this.statusMessage = 'Welcome to CodeCollab IDE';
+    this.currentFile = null;
+    this.statusMessage = '● Connected';
     this.isEditing = false;
   }
 
@@ -66,6 +221,14 @@ class TerminalSession {
 
   clearScreen() {
     this.write('\x1b[2J\x1b[H');
+  }
+
+  handleResize(info) {
+    if (!info) return;
+    this.pty = info;
+    if (!this.isEditing) {
+      this.renderIDE();
+    }
   }
 
   isCancel(val) {
@@ -91,47 +254,11 @@ class TerminalSession {
         resolve('__cancel__');
       });
 
-      rl.question(`${C.green}${questionText}${C.reset}`, (answer) => {
+      rl.question(`${C.roseBright}${questionText}${C.reset}`, (answer) => {
         rl.close();
         this.stream.resume();
         resolve((answer || '').trim());
       });
-    });
-  }
-
-  // ── Secret Prompt Helper ────────────────────────────────────────
-  async promptSecret(questionText) {
-    this.stream.resume();
-    this.write(`${C.green}${questionText}${C.reset}`);
-
-    return new Promise((resolve) => {
-      let secret = '';
-      const onData = (chunk) => {
-        const str = chunk.toString();
-        for (let i = 0; i < str.length; i++) {
-          const char = str[i];
-          if (char === '\r' || char === '\n') {
-            this.stream.removeListener('data', onData);
-            this.writeln();
-            this.stream.resume();
-            return resolve(secret.trim());
-          } else if (char === '\u0008' || char === '\x7f') {
-            if (secret.length > 0) {
-              secret = secret.slice(0, -1);
-              this.write('\b \b');
-            }
-          } else if (char === '\u0003' || char === '\u001b') {
-            this.stream.removeListener('data', onData);
-            this.writeln();
-            this.stream.resume();
-            return resolve('__cancel__');
-          } else if (char >= ' ' && char <= '~') {
-            secret += char;
-            this.write(`${C.pink}*${C.reset}`);
-          }
-        }
-      };
-      this.stream.on('data', onData);
     });
   }
 
@@ -142,19 +269,17 @@ class TerminalSession {
       const space = res.data;
       this.workspaceFiles = (space.files || []).filter((f) => !f.isFolder);
 
-      // Default to index.html if available, or first file
       if (!this.currentFile && this.workspaceFiles.length > 0) {
         const indexHtml = this.workspaceFiles.find((f) => f.name.toLowerCase() === 'index.html');
         this.currentFile = indexHtml || this.workspaceFiles[0];
         const idx = this.workspaceFiles.indexOf(this.currentFile);
         if (idx >= 0) this.selectedFileIndex = idx;
       } else if (this.currentFile) {
-        // Refresh current file content if it was updated
         const updated = this.workspaceFiles.find((f) => f.name === this.currentFile.name && f.path === this.currentFile.path);
         if (updated) this.currentFile = updated;
       }
     } catch (e) {
-      this.statusMessage = `Error fetching files: ${e.message}`;
+      this.statusMessage = `✗ Error fetching files: ${e.message}`;
     }
 
     try {
@@ -165,161 +290,356 @@ class TerminalSession {
     }
   }
 
-  // ── Render Split-View IDE (VS Code Theme) ────────────────────────
+  // ── Render Split-View IDE (Theme from reference image) ────────────
   renderIDE() {
-    const cols = Math.max(80, this.pty.cols || 80);
-    const rows = Math.max(24, this.pty.rows || 24);
+    const cols = Math.max(76, this.pty.cols || 80);
+    const rows = Math.max(22, this.pty.rows || 24);
 
-    const sidebarWidth = Math.min(32, Math.max(24, Math.floor(cols * 0.3)));
-    const editorWidth = cols - sidebarWidth - 1; // 1 char for vertical border
-    const bodyHeight = rows - 5; // Top bar (2), header (1), footer/status (2)
-
-    let out = '\x1b[H'; // Move to home without flickering
-
-    // ── 1. Top Bar: App Branding & Status ──────────────────────────
     const userLabel = this.user ? `${this.user.username}` : 'Guest';
-    const topText = ` CODECOLLAB IDE - Workspace: [${this.room}] | User: [${userLabel}]`;
-    const rightText = `https://jeeban.life/${this.room} `;
-    const spaceBetween = Math.max(0, cols - topText.length - rightText.length);
+    const boxHeight = rows - 3; // 2 rows for footer shortcuts and status bar
+    const innerRows = Math.max(6, boxHeight - 2);
 
-    out += `${C.pinkBg}${C.bold}${C.white}${topText}${' '.repeat(spaceBetween)}${rightText}${C.reset}\x1b[K\r\n`;
+    // Check if 3-panel layout fits (requires >= 105 columns)
+    const isThreePane = cols >= 105;
 
-    // ── 2. Tab Bar: [FILES] | [UPLOADS] ────────────────────────────
-    const filesTabActive = this.activeTab === 'files';
-    const filesTab = filesTabActive
-      ? `${C.greenBg}${C.bold}${C.white} [1] FILES ${C.reset}`
-      : `${C.gray}  [1] Files  ${C.reset}`;
-    const uploadsTab = !filesTabActive
-      ? `${C.pinkBg}${C.bold}${C.white} [2] UPLOADS (${this.workspaceUploads.length}) ${C.reset}`
-      : `${C.gray}  [2] Uploads (${this.workspaceUploads.length})  ${C.reset}`;
-
-    const currentFilename = this.activeTab === 'files'
-      ? (this.currentFile ? `  ${C.pink}${this.currentFile.name}${C.reset} ${C.green}(${this.currentFile.language || 'text'})${C.reset}` : '  (No file open)')
-      : `  ${C.pink}Codespace: ${C.green}${C.bold}${this.room}${C.reset}`;
-
-    const leftTabSpace = sidebarWidth - 24;
-    const tabPad = leftTabSpace > 0 ? ' '.repeat(leftTabSpace) : '';
-
-    out += `${filesTab}${uploadsTab}${tabPad}${C.green}│${C.reset}${currentFilename}\x1b[K\r\n`;
-
-    // ── 3. Separator Line ──────────────────────────────────────────
-    out += `${C.green}${'─'.repeat(sidebarWidth)}┼${'─'.repeat(editorWidth)}${C.reset}\x1b[K\r\n`;
-
-    // ── 4. Main Body: Left Sidebar + Right Editor/Preview ──────────
-    // Prepare Left Sidebar Lines
-    const leftLines = [];
-    if (this.activeTab === 'files') {
-      leftLines.push(`${C.bold}${C.green} EXPLORER${C.reset}`);
-      if (this.workspaceFiles.length === 0) {
-        leftLines.push(`  (No files)`);
-      } else {
-        this.workspaceFiles.forEach((file, idx) => {
-          const isSelected = idx === this.selectedFileIndex;
-          const isOpened = this.currentFile && this.currentFile.name === file.name;
-          const prefix = isSelected ? `${C.pink}${C.bold}» ${C.reset}` : '  ';
-          const name = file.name.length > sidebarWidth - 6 ? file.name.slice(0, sidebarWidth - 9) + '...' : file.name;
-
-          if (isSelected) {
-            leftLines.push(`${prefix}${C.pink}${C.bold}${name}${C.reset}`);
-          } else if (isOpened) {
-            leftLines.push(`${prefix}${C.green}${name}${C.reset}`);
-          } else {
-            leftLines.push(`${prefix}${name}`);
-          }
-        });
-      }
-      leftLines.push('');
-      leftLines.push(` [i] Insert/Write`);
-      leftLines.push(` [^O] Save File`);
-      leftLines.push(` [N] + New File`);
-      leftLines.push(` [D] Delete File`);
+    let p1Width, p2Width, p3Width;
+    if (isThreePane) {
+      p1Width = 22; // Places sidebar
+      p2Width = Math.min(38, Math.max(28, Math.floor((cols - p1Width - 2) * 0.42))); // Middle file list
+      p3Width = cols - p1Width - p2Width - 2; // Preview / details
     } else {
-      leftLines.push(`${C.bold}${C.pink} UPLOADS (${this.workspaceUploads.length})${C.reset}`);
-      if (this.workspaceUploads.length === 0) {
-        leftLines.push(`  (No uploads)`);
-        leftLines.push(`  Use SCP to upload`);
-      } else {
-        this.workspaceUploads.forEach((u, idx) => {
-          const isSelected = idx === this.selectedUploadIndex;
-          const prefix = isSelected ? `${C.pink}${C.bold}» ${C.reset}` : '  ';
-          const name = u.originalName.length > sidebarWidth - 6 ? u.originalName.slice(0, sidebarWidth - 9) + '...' : u.originalName;
-
-          if (isSelected) {
-            leftLines.push(`${prefix}${C.pink}${C.bold}${name}${C.reset}`);
-          } else {
-            leftLines.push(`${prefix}${C.green}${name}${C.reset}`);
-          }
-        });
-      }
-      leftLines.push('');
-      leftLines.push(` [U] Direct SCP Guide`);
+      p1Width = Math.min(36, Math.max(28, Math.floor(cols * 0.38))); // Combined sidebar/list
+      p2Width = cols - p1Width - 1; // Preview / details
+      p3Width = 0;
     }
 
-    // Prepare Right Content Lines
-    const rightLines = [];
-    if (this.activeTab === 'files') {
-      if (this.currentFile && this.currentFile.content) {
-        const rawLines = this.currentFile.content.split('\n');
-        rawLines.forEach((l, i) => {
-          const lineNum = `${(i + 1).toString().padStart(3, ' ')} │ `;
-          const truncated = l.length > editorWidth - 8 ? l.slice(0, editorWidth - 11) + '...' : l;
-          rightLines.push(`${C.pink}${lineNum}${C.reset}${truncated}`);
-        });
-      } else if (this.currentFile) {
-        rightLines.push(`  (Empty file. Press [P] to paste or edit content)`);
+    // ── Build Pane 1 Content ───────────────────────────────────────
+    let p1Title = '';
+    const p1Lines = [];
+
+    if (isThreePane) {
+      p1Title = `${C.roseBright}${C.bold}Places${C.reset}`;
+      p1Lines.push(` ${C.roseBright}${C.bold}Navigation${C.reset}`);
+      p1Lines.push(this.activeTab === 'files'
+        ? `${C.selectBg}${C.selectFg} ▸ Files (${this.workspaceFiles.length})    ${C.reset}`
+        : `   ${C.textMain}Files (${this.workspaceFiles.length})${C.reset}`);
+      p1Lines.push(this.activeTab === 'uploads'
+        ? `${C.selectBg}${C.selectFg} ▸ Uploads (${this.workspaceUploads.length})  ${C.reset}`
+        : `   ${C.textMain}Uploads (${this.workspaceUploads.length})${C.reset}`);
+      p1Lines.push(`   ${C.textMuted}SCP Guide [U]${C.reset}`);
+      p1Lines.push(`   ${C.textMuted}Switch Space [S]${C.reset}`);
+      p1Lines.push(`   ${C.textMuted}New File [N]${C.reset}`);
+      p1Lines.push('');
+      p1Lines.push(` ${C.roseBright}${C.bold}Status${C.reset}`);
+      p1Lines.push(`  ${C.mint}● ONLINE${C.reset}`);
+      p1Lines.push(`  ${C.textMuted}Room: ${C.roseBright}${this.room}${C.reset}`);
+      p1Lines.push(`  ${C.textMuted}User: ${C.cyan}${userLabel}${C.reset}`);
+      p1Lines.push(`  ${C.textMuted}jeeban.life${C.reset}`);
+    } else {
+      // 2-Pane mode: Left pane has tabs and file list
+      const filesCount = this.workspaceFiles.length;
+      const uploadsCount = this.workspaceUploads.length;
+      p1Title = this.activeTab === 'files'
+        ? `${C.selectBg}${C.selectFg} [1] Files (${filesCount}) ${C.reset}${C.textMuted} [2] Uploads (${uploadsCount})${C.reset}`
+        : `${C.textMuted}[1] Files (${filesCount}) ${C.reset}${C.selectBg}${C.selectFg} [2] Uploads (${uploadsCount}) ${C.reset}`;
+
+      // List of files or uploads
+      const innerW = p1Width - 2;
+      if (this.activeTab === 'files') {
+        const total = this.workspaceFiles.length;
+        if (this.selectedFileIndex < this.fileScrollOffset) this.fileScrollOffset = this.selectedFileIndex;
+        if (this.selectedFileIndex >= this.fileScrollOffset + innerRows) this.fileScrollOffset = this.selectedFileIndex - innerRows + 1;
+
+        if (total === 0) {
+          p1Lines.push(`  ${C.textMuted}(No files in workspace)${C.reset}`);
+          p1Lines.push(`  ${C.textMuted}Press [N] to create a file${C.reset}`);
+        } else {
+          for (let i = 0; i < innerRows; i++) {
+            const idx = this.fileScrollOffset + i;
+            if (idx >= total) break;
+            const file = this.workspaceFiles[idx];
+            const isSel = idx === this.selectedFileIndex;
+            const sizeStr = formatSize(Buffer.byteLength(file.content || '', 'utf8'));
+            const rightStr = `${sizeStr} `;
+            const pointer = isSel ? '>' : ' ';
+            const icon = '◆';
+            const maxNameLen = Math.max(8, innerW - rightStr.length - 6);
+            const displayName = file.name.length > maxNameLen ? file.name.slice(0, maxNameLen - 1) + '…' : file.name;
+            const leftStr = ` ${pointer} ${icon} ${displayName}`;
+            const padLen = Math.max(1, innerW - leftStr.length - rightStr.length);
+            const lineStr = leftStr + ' '.repeat(padLen) + rightStr;
+
+            if (isSel) {
+              p1Lines.push(`${C.selectBg}${C.selectFg}${lineStr.slice(0, innerW)}${C.reset}`);
+            } else {
+              p1Lines.push(`   ${C.textMain}${displayName}${C.reset}${' '.repeat(padLen)}${C.textMuted}${rightStr}${C.reset}`);
+            }
+          }
+        }
       } else {
-        rightLines.push(`  Select a file from the explorer on the left or press [N] to create one.`);
+        const total = this.workspaceUploads.length;
+        if (this.selectedUploadIndex < this.uploadScrollOffset) this.uploadScrollOffset = this.selectedUploadIndex;
+        if (this.selectedUploadIndex >= this.uploadScrollOffset + innerRows) this.uploadScrollOffset = this.selectedUploadIndex - innerRows + 1;
+
+        if (total === 0) {
+          p1Lines.push(`  ${C.textMuted}(No uploaded files)${C.reset}`);
+          p1Lines.push(`  ${C.textMuted}Use SCP to upload:${C.reset}`);
+          p1Lines.push(`  ${C.rose}scp -P 2222 <f> ${this.room}/${C.reset}`);
+        } else {
+          for (let i = 0; i < innerRows; i++) {
+            const idx = this.uploadScrollOffset + i;
+            if (idx >= total) break;
+            const upload = this.workspaceUploads[idx];
+            const isSel = idx === this.selectedUploadIndex;
+            const sizeStr = formatSize(upload.size || 0);
+            const rightStr = `${sizeStr} `;
+            const pointer = isSel ? '>' : ' ';
+            const icon = '⧉';
+            const maxNameLen = Math.max(8, innerW - rightStr.length - 6);
+            const displayName = upload.originalName.length > maxNameLen ? upload.originalName.slice(0, maxNameLen - 1) + '…' : upload.originalName;
+            const leftStr = ` ${pointer} ${icon} ${displayName}`;
+            const padLen = Math.max(1, innerW - leftStr.length - rightStr.length);
+            const lineStr = leftStr + ' '.repeat(padLen) + rightStr;
+
+            if (isSel) {
+              p1Lines.push(`${C.selectBg}${C.selectFg}${lineStr.slice(0, innerW)}${C.reset}`);
+            } else {
+              p1Lines.push(`   ${C.textMain}${displayName}${C.reset}${' '.repeat(padLen)}${C.textMuted}${rightStr}${C.reset}`);
+            }
+          }
+        }
+      }
+    }
+
+    // ── Build Pane 2 Content (Middle Pane in 3-pane mode, or Right Pane in 2-pane mode) ──
+    let p2Title = '';
+    const p2Lines = [];
+
+    if (isThreePane) {
+      // Middle Pane is the File / Upload List
+      const innerW = p2Width - 2;
+      p2Title = `${C.roseBright}${C.bold}~/${this.room}${this.activeTab === 'uploads' ? '/uploads' : ''}${C.reset}`;
+
+      if (this.activeTab === 'files') {
+        const total = this.workspaceFiles.length;
+        if (this.selectedFileIndex < this.fileScrollOffset) this.fileScrollOffset = this.selectedFileIndex;
+        if (this.selectedFileIndex >= this.fileScrollOffset + innerRows) this.fileScrollOffset = this.selectedFileIndex - innerRows + 1;
+
+        if (total === 0) {
+          p2Lines.push(`  ${C.textMuted}(No files in workspace)${C.reset}`);
+          p2Lines.push(`  ${C.textMuted}Press [N] to create a file${C.reset}`);
+        } else {
+          for (let i = 0; i < innerRows; i++) {
+            const idx = this.fileScrollOffset + i;
+            if (idx >= total) break;
+            const file = this.workspaceFiles[idx];
+            const isSel = idx === this.selectedFileIndex;
+            const sizeStr = formatSize(Buffer.byteLength(file.content || '', 'utf8'));
+            const rightStr = `${sizeStr} `;
+            const pointer = isSel ? '>' : ' ';
+            const icon = '◆';
+            const maxNameLen = Math.max(8, innerW - rightStr.length - 6);
+            const displayName = file.name.length > maxNameLen ? file.name.slice(0, maxNameLen - 1) + '…' : file.name;
+            const leftStr = ` ${pointer} ${icon} ${displayName}`;
+            const padLen = Math.max(1, innerW - leftStr.length - rightStr.length);
+            const lineStr = leftStr + ' '.repeat(padLen) + rightStr;
+
+            if (isSel) {
+              p2Lines.push(`${C.selectBg}${C.selectFg}${lineStr.slice(0, innerW)}${C.reset}`);
+            } else {
+              p2Lines.push(`   ${C.textMain}${displayName}${C.reset}${' '.repeat(padLen)}${C.textMuted}${rightStr}${C.reset}`);
+            }
+          }
+        }
+      } else {
+        const total = this.workspaceUploads.length;
+        if (this.selectedUploadIndex < this.uploadScrollOffset) this.uploadScrollOffset = this.selectedUploadIndex;
+        if (this.selectedUploadIndex >= this.uploadScrollOffset + innerRows) this.uploadScrollOffset = this.selectedUploadIndex - innerRows + 1;
+
+        if (total === 0) {
+          p2Lines.push(`  ${C.textMuted}(No uploaded files)${C.reset}`);
+          p2Lines.push(`  ${C.textMuted}Upload files with SCP:${C.reset}`);
+          p2Lines.push(`  ${C.rose}scp -P 2222 <f> ${this.room}/${C.reset}`);
+        } else {
+          for (let i = 0; i < innerRows; i++) {
+            const idx = this.uploadScrollOffset + i;
+            if (idx >= total) break;
+            const upload = this.workspaceUploads[idx];
+            const isSel = idx === this.selectedUploadIndex;
+            const sizeStr = formatSize(upload.size || 0);
+            const rightStr = `${sizeStr} `;
+            const pointer = isSel ? '>' : ' ';
+            const icon = '⧉';
+            const maxNameLen = Math.max(8, innerW - rightStr.length - 6);
+            const displayName = upload.originalName.length > maxNameLen ? upload.originalName.slice(0, maxNameLen - 1) + '…' : upload.originalName;
+            const leftStr = ` ${pointer} ${icon} ${displayName}`;
+            const padLen = Math.max(1, innerW - leftStr.length - rightStr.length);
+            const lineStr = leftStr + ' '.repeat(padLen) + rightStr;
+
+            if (isSel) {
+              p2Lines.push(`${C.selectBg}${C.selectFg}${lineStr.slice(0, innerW)}${C.reset}`);
+            } else {
+              p2Lines.push(`   ${C.textMain}${displayName}${C.reset}${' '.repeat(padLen)}${C.textMuted}${rightStr}${C.reset}`);
+            }
+          }
+        }
+      }
+    }
+
+    // ── Build Preview / Details Content ────────────────────────────
+    // In 3-pane mode, this is Pane 3. In 2-pane mode, this is Pane 2.
+    const previewWidth = isThreePane ? p3Width : p2Width;
+    let previewTitle = '';
+    const previewLines = [];
+
+    if (this.activeTab === 'files') {
+      const activeFile = this.currentFile || this.workspaceFiles[this.selectedFileIndex];
+      if (activeFile) {
+        previewTitle = `${C.roseBright}${C.bold}${activeFile.name}${C.reset}`;
+        const rawContent = activeFile.content || '';
+        const lines = rawContent.split('\n');
+
+        // Subheader line matching screenshot
+        previewLines.push(` ${C.roseBright}Code${C.reset}  ${C.textMuted}${activeFile.language || 'text'} • ${lines.length} lines${C.reset}`);
+
+        // Code preview with line numbers
+        for (let i = 0; i < innerRows - 1; i++) {
+          const lineIdx = i;
+          if (lineIdx < lines.length) {
+            const lineNum = `${(lineIdx + 1).toString().padStart(3, ' ')} │ `;
+            const highlighted = highlightSyntax(lines[lineIdx]);
+            previewLines.push(` ${C.textDim}${lineNum}${C.reset}${highlighted}`);
+          } else {
+            break;
+          }
+        }
+      } else {
+        previewTitle = `${C.roseBright}Editor${C.reset}`;
+        previewLines.push('');
+        previewLines.push(`  ${C.textMuted}Select a file from the explorer on the left.${C.reset}`);
+        previewLines.push(`  ${C.textMuted}Press [N] to create a new file.${C.reset}`);
       }
     } else {
       // Upload Tab Details
-      const selectedUpload = this.workspaceUploads[this.selectedUploadIndex];
-      if (selectedUpload) {
-        rightLines.push('');
-        rightLines.push(`  ${C.bold}${C.pink}FILE DETAILS${C.reset}`);
-        rightLines.push(`  ${C.green}${'─'.repeat(Math.min(68, editorWidth - 6))}${C.reset}`);
-        rightLines.push(`  ${C.bold}${C.pink}Original Name :${C.reset} ${C.green}${selectedUpload.originalName}${C.reset}`);
-        rightLines.push(`  ${C.bold}${C.pink}File Size     :${C.reset} ${C.green}${((selectedUpload.size || 0) / 1024).toFixed(2)} KB (${selectedUpload.size} Bytes)${C.reset}`);
-        rightLines.push(`  ${C.bold}${C.pink}MIME Type     :${C.reset} ${C.green}${selectedUpload.mimeType || 'application/octet-stream'}${C.reset}`);
-        rightLines.push(`  ${C.bold}${C.pink}Uploaded At   :${C.reset} ${C.green}${new Date(selectedUpload.createdAt).toLocaleString()}${C.reset}`);
-        rightLines.push(`  ${C.bold}${C.pink}Share URL     :${C.reset} ${C.green}${C.underline}https://jeeban.life/s/${selectedUpload._id}${C.reset}`);
-        rightLines.push(`  ${C.green}${'─'.repeat(Math.min(68, editorWidth - 6))}${C.reset}`);
-        rightLines.push('');
-        rightLines.push(`  ${C.bold}${C.pink}Download to your machine (pwd):${C.reset}`);
-        rightLines.push(`  ${C.green}┌── [ SCP COMMAND ] ──────────────────────────────────────────────────┐${C.reset}`);
-        rightLines.push(`  ${C.green}│${C.reset} scp -P 2222 jeeban.life:${this.room}/"${selectedUpload.originalName}" ./`);
-        rightLines.push(`  ${C.green}└─────────────────────────────────────────────────────────────────────┘${C.reset}`);
-        rightLines.push('');
-        rightLines.push(`  ${C.bold}${C.pink}Or via Curl (saves with original filename):${C.reset}`);
-        rightLines.push(`  ${C.green}┌── [ CURL COMMAND ] ─────────────────────────────────────────────────┐${C.reset}`);
-        rightLines.push(`  ${C.green}│${C.reset} curl -L -o "${selectedUpload.originalName}" https://jeeban.life/s/${selectedUpload._id}`);
-        rightLines.push(`  ${C.green}└─────────────────────────────────────────────────────────────────────┘${C.reset}`);
+      const uploadItem = this.workspaceUploads[this.selectedUploadIndex];
+      if (uploadItem) {
+        previewTitle = `${C.roseBright}${C.bold}${uploadItem.originalName}${C.reset}`;
+        const sizeStr = formatSize(uploadItem.size || 0);
+        previewLines.push(` ${C.roseBright}Upload${C.reset}  ${C.textMuted}${uploadItem.mimeType || 'application/octet-stream'} • ${sizeStr}${C.reset}`);
+        previewLines.push('');
+        previewLines.push(`  ${C.rose}▸ Name     :${C.reset} ${C.textMain}${uploadItem.originalName}${C.reset}`);
+        previewLines.push(`  ${C.rose}▸ Size     :${C.reset} ${C.textMain}${sizeStr} (${uploadItem.size || 0} Bytes)${C.reset}`);
+        previewLines.push(`  ${C.rose}▸ MIME     :${C.reset} ${C.textMain}${uploadItem.mimeType || 'application/octet-stream'}${C.reset}`);
+        previewLines.push(`  ${C.rose}▸ Uploaded :${C.reset} ${C.textMain}${new Date(uploadItem.createdAt).toLocaleString()}${C.reset}`);
+        previewLines.push(`  ${C.rose}▸ Share URL:${C.reset} ${C.cyan}${C.underline}https://jeeban.life/s/${uploadItem._id}${C.reset}  ${C.textMuted}[C] Copy${C.reset}`);
+        previewLines.push('');
+
+        // Curl command card
+        const cardW = Math.min(66, Math.max(34, previewWidth - 6));
+        const innerCardW = cardW - 4;
+        previewLines.push(`  ${C.roseBright}Download via Curl:${C.reset} ${C.textMuted}[W] Copy${C.reset}`);
+        previewLines.push(`  ${C.rose}╭─ [ CURL COMMAND ] ${'─'.repeat(Math.max(0, cardW - 20))}╮${C.reset}`);
+        const curlCmd = `curl -fL -o "${uploadItem.originalName}" "https://jeeban.life/s/${uploadItem._id}"`;
+        const wrappedCurl = wrapCommand(curlCmd, innerCardW);
+        wrappedCurl.forEach((line) => {
+          previewLines.push(`  ${C.rose}│${C.reset} ${fitToWidth(C.textMain + line, innerCardW)} ${C.rose}│${C.reset}`);
+        });
+        previewLines.push(`  ${C.rose}╰${'─'.repeat(Math.max(0, cardW - 2))}╯${C.reset}`);
+        previewLines.push('');
+
+        // SCP command card
+        previewLines.push(`  ${C.roseBright}Download via SCP:${C.reset} ${C.textMuted}[S] Copy${C.reset}`);
+        previewLines.push(`  ${C.rose}╭─ [ SCP COMMAND ] ${'─'.repeat(Math.max(0, cardW - 19))}╮${C.reset}`);
+        const scpCmd = `scp -P 2222 jeeban.life:${this.room}/"${uploadItem.originalName}" ./`;
+        const wrappedScp = wrapCommand(scpCmd, innerCardW);
+        wrappedScp.forEach((line) => {
+          previewLines.push(`  ${C.rose}│${C.reset} ${fitToWidth(C.textMain + line, innerCardW)} ${C.rose}│${C.reset}`);
+        });
+        previewLines.push(`  ${C.rose}╰${'─'.repeat(Math.max(0, cardW - 2))}╯${C.reset}`);
       } else {
-        rightLines.push('');
-        rightLines.push(`  ${C.pink}No uploaded files found in this workspace.${C.reset}`);
-        rightLines.push('');
-        rightLines.push(`  Upload files directly from your terminal:`);
-        rightLines.push(`  ${C.green}scp -P 2222 <local-file> <your-username>@jeeban.life:${this.room}/${C.reset}`);
+        previewTitle = `${C.roseBright}Uploads${C.reset}`;
+        previewLines.push('');
+        previewLines.push(`  ${C.textMuted}No files uploaded yet in workspace '${this.room}'.${C.reset}`);
+        previewLines.push('');
+        previewLines.push(`  ${C.roseBright}Direct SCP upload from your local machine:${C.reset}`);
+        previewLines.push(`  ${C.mint}scp -P 2222 <local-file> ${userLabel}@jeeban.life:${this.room}/${C.reset}`);
       }
     }
 
-    // Combine left and right columns row by row
-    for (let r = 0; r < bodyHeight; r++) {
-      const leftContent = leftLines[r] || '';
-      // Strip ANSI for width calculation
-      const leftPlain = leftContent.replace(/\x1b\[[0-9;]*m/g, '');
-      const leftPad = Math.max(0, sidebarWidth - leftPlain.length);
-
-      const rightContent = rightLines[r] || '';
-      out += `${leftContent}${' '.repeat(leftPad)}${C.green}│${C.reset} ${rightContent}\x1b[K\r\n`;
+    // Assign preview lines to proper pane
+    let p3Title = '';
+    const p3Lines = [];
+    if (isThreePane) {
+      p3Title = previewTitle;
+      p3Lines.push(...previewLines);
+    } else {
+      p2Title = previewTitle;
+      p2Lines.push(...previewLines);
     }
 
-    // ── 5. Status / Command Bar ────────────────────────────────────
-    out += `${C.green}${'─'.repeat(cols)}${C.reset}\x1b[K\r\n`;
-    const navHelp = this.isEditing
-      ? ` [INSERT MODE] Type or paste | [Ctrl+O] to SAVE | [Esc] to CANCEL`
-      : ` [↑/↓] Select File | [i] Write/Paste | [Ctrl+O] Save | [Tab] Switch Tab | [N] New | [S] Space | [Q] Exit`;
-    out += `${C.dim}${navHelp}\x1b[K\r\n`;
-    out += `${C.pink}STATUS:${C.reset} ${C.greenBright}${this.statusMessage}${C.reset}\x1b[K`;
+    // ── Assemble Screen Rows ───────────────────────────────────────
+    let out = '\x1b[H'; // Cursor to home
+
+    // Top border row
+    if (isThreePane) {
+      out += `${renderBoxTop(p1Title, p1Width)} ${renderBoxTop(p2Title, p2Width)} ${renderBoxTop(p3Title, p3Width)}\x1b[K\r\n`;
+    } else {
+      out += `${renderBoxTop(p1Title, p1Width)} ${renderBoxTop(p2Title, p2Width)}\x1b[K\r\n`;
+    }
+
+    // Body rows
+    for (let r = 0; r < innerRows; r++) {
+      const line1 = p1Lines[r] || '';
+      const line2 = p2Lines[r] || '';
+      if (isThreePane) {
+        const line3 = p3Lines[r] || '';
+        out += `${renderBoxRow(line1, p1Width)} ${renderBoxRow(line2, p2Width)} ${renderBoxRow(line3, p3Width)}\x1b[K\r\n`;
+      } else {
+        out += `${renderBoxRow(line1, p1Width)} ${renderBoxRow(line2, p2Width)}\x1b[K\r\n`;
+      }
+    }
+
+    // Bottom border row
+    if (isThreePane) {
+      out += `${renderBoxBottom(p1Width)} ${renderBoxBottom(p2Width)} ${renderBoxBottom(p3Width)}\x1b[K\r\n`;
+    } else {
+      out += `${renderBoxBottom(p1Width)} ${renderBoxBottom(p2Width)}\x1b[K\r\n`;
+    }
+
+    // ── Row 1: Context-Sensitive Shortcuts ─────────────────────────
+    let navHelp = '';
+    if (this.isEditing) {
+      navHelp = ` ${C.amber}[INSERT MODE] Type or paste text${C.reset}  ${C.rose}│${C.reset}  ${C.roseBright}[^O] Save File${C.reset}  ${C.rose}│${C.reset}  ${C.textMuted}[Esc] Cancel${C.reset}`;
+    } else if (this.activeTab === 'files') {
+      navHelp = ` ${C.roseBright}[↑↓]${C.reset} Navigate  ${C.roseBright}[Enter]${C.reset} Open  ${C.roseBright}[i]${C.reset} Edit  ${C.roseBright}[^O]${C.reset} Save  ${C.roseBright}[Tab]${C.reset} Switch  ${C.roseBright}[N]${C.reset} New  ${C.roseBright}[D]${C.reset} Delete  ${C.roseBright}[Q]${C.reset} Exit`;
+    } else {
+      navHelp = ` ${C.roseBright}[↑↓]${C.reset} Navigate  ${C.roseBright}[C]${C.reset} Copy URL  ${C.roseBright}[W]${C.reset} Copy Curl  ${C.roseBright}[S]${C.reset} Copy SCP  ${C.roseBright}[Tab]${C.reset} Switch  ${C.roseBright}[U]${C.reset} SCP Guide  ${C.roseBright}[Q]${C.reset} Exit`;
+    }
+    out += `${navHelp}\x1b[K\r\n`;
+
+    // ── Row 2: Status Bar (Matching screenshot footer) ─────────────
+    let leftStatus = '';
+    if (this.activeTab === 'files') {
+      const idx = this.workspaceFiles.length > 0 ? this.selectedFileIndex + 1 : 0;
+      const curName = this.currentFile ? this.currentFile.name : (this.workspaceFiles[0]?.name || '-');
+      leftStatus = `${C.textMain}${idx}/${this.workspaceFiles.length}  ${curName}${C.reset}`;
+    } else {
+      const idx = this.workspaceUploads.length > 0 ? this.selectedUploadIndex + 1 : 0;
+      const curName = this.workspaceUploads[this.selectedUploadIndex]?.originalName || '-';
+      leftStatus = `${C.textMain}${idx}/${this.workspaceUploads.length}  ${curName}${C.reset}`;
+    }
+
+    const rightStatus = `${C.mint}● ONLINE${C.reset}  ${C.textMuted}room:${C.reset} ${C.roseBright}${this.room}${C.reset}  ${C.textMuted}user:${C.reset} ${C.cyan}${userLabel}${C.reset}`;
+
+    // Center status feedback message
+    const centerMsg = `${C.textMain}${this.statusMessage}${C.reset}`;
+
+    const totalPlain = visibleLength(leftStatus) + visibleLength(centerMsg) + visibleLength(rightStatus);
+    const gap = Math.max(2, Math.floor((cols - totalPlain) / 2));
+    const pad1 = ' '.repeat(gap);
+    const pad2 = ' '.repeat(Math.max(2, cols - totalPlain - gap));
+
+    out += ` ${leftStatus}${pad1}${centerMsg}${pad2}${rightStatus}\x1b[K`;
 
     this.write(out);
   }
@@ -328,11 +648,11 @@ class TerminalSession {
   async runInteractive() {
     this.clearScreen();
 
-    // 1. Initial Prompt: Ask for Workspace Name if not set or default
-    this.writeln(`${C.pink}┌── [ CODECOLLAB IDE - WORKSPACE SETUP ] ────────────────────────────────┐${C.reset}`);
-    this.writeln(`${C.pink}│${C.reset} Enter the Space Name you want to collaborate in.                       ${C.pink}│${C.reset}`);
-    this.writeln(`${C.pink}│${C.reset} Press [Enter] for default 'general', or type custom workspace name.     ${C.pink}│${C.reset}`);
-    this.writeln(`${C.pink}└───────────────────────────────────────────────────────────────────────┘${C.reset}\n`);
+    // Initial Workspace Setup Modal
+    this.writeln(`${C.rose}╭─ [ CODECOLLAB IDE - WORKSPACE SETUP ] ────────────────────────────────╮${C.reset}`);
+    this.writeln(`${C.rose}│${C.reset} Enter the Space Name you want to collaborate in.                       ${C.rose}│${C.reset}`);
+    this.writeln(`${C.rose}│${C.reset} Press [Enter] for default 'general', or type custom workspace name.     ${C.rose}│${C.reset}`);
+    this.writeln(`${C.rose}╰───────────────────────────────────────────────────────────────────────╯${C.reset}\n`);
 
     const requestedRoom = await this.prompt('Workspace Name [default: general]: ');
     if (requestedRoom && requestedRoom !== '__cancel__' && /^[a-zA-Z0-9_-]+$/.test(requestedRoom)) {
@@ -343,18 +663,18 @@ class TerminalSession {
 
     this.write('\x1b[?25l'); // Hide cursor
     await this.fetchWorkspaceData();
-    this.statusMessage = `Connected to workspace '${this.room}'`;
+    this.statusMessage = '● Connected';
     this.renderIDE();
 
     // Key event listener
     return new Promise((resolve) => {
       const handleInput = async (buf) => {
-        if (this.isEditing) return; // Prevent interference when in text prompt
+        if (this.isEditing) return;
 
         const key = buf.toString();
 
         // ── Arrows / Navigation ────────────────────────────────────
-        if (key === '\x1b[A') { // Up Arrow
+        if (key === '\x1b[A' || key === 'k') { // Up Arrow / 'k'
           if (this.activeTab === 'files') {
             if (this.selectedFileIndex > 0) {
               this.selectedFileIndex--;
@@ -367,7 +687,7 @@ class TerminalSession {
               this.renderIDE();
             }
           }
-        } else if (key === '\x1b[B') { // Down Arrow
+        } else if (key === '\x1b[B' || key === 'j') { // Down Arrow / 'j'
           if (this.activeTab === 'files') {
             if (this.selectedFileIndex < this.workspaceFiles.length - 1) {
               this.selectedFileIndex++;
@@ -384,16 +704,15 @@ class TerminalSession {
           if (key === '1') this.activeTab = 'files';
           else if (key === '2') this.activeTab = 'uploads';
           else this.activeTab = this.activeTab === 'files' ? 'uploads' : 'files';
-          this.statusMessage = `Switched to ${this.activeTab.toUpperCase()} tab`;
+          this.statusMessage = `Switched to ${this.activeTab.toUpperCase()}`;
           this.renderIDE();
         } else if (key === '\x1b') { // Esc
-          // Return to Files tab / beginning
           this.activeTab = 'files';
           this.selectedFileIndex = 0;
           if (this.workspaceFiles.length > 0) {
             this.currentFile = this.workspaceFiles[0];
           }
-          this.statusMessage = 'Reset focus to file explorer';
+          this.statusMessage = '● Connected';
           this.renderIDE();
         } else if (key === '\r' || key === '\n') { // Enter
           if (this.activeTab === 'files') {
@@ -403,7 +722,7 @@ class TerminalSession {
               this.renderIDE();
             }
           }
-        } else if (key === 'i' || key === 'I') { // 'i' -> Enter insert/type/paste mode
+        } else if (key === 'i' || key === 'I') { // 'i' -> Inline write / edit mode
           if (this.activeTab === 'files') {
             await this.handleDirectInlineEdit();
           }
@@ -411,25 +730,57 @@ class TerminalSession {
           if (this.activeTab === 'files' && this.currentFile) {
             await this.saveCurrentFile();
           }
-        } else if (key.toLowerCase() === 'p') { // Paste / Edit (legacy shortcut also supported)
-          await this.handleDirectInlineEdit();
+        } else if (key.toLowerCase() === 'c') { // 'C' -> Copy URL
+          if (this.activeTab === 'uploads') {
+            const upload = this.workspaceUploads[this.selectedUploadIndex];
+            if (upload) {
+              const url = `https://jeeban.life/s/${upload._id}`;
+              copyToClipboard(this.stream, url);
+              this.statusMessage = '✓ Share URL copied to clipboard';
+              this.renderIDE();
+            }
+          } else {
+            const url = `https://jeeban.life/${this.room}`;
+            copyToClipboard(this.stream, url);
+            this.statusMessage = '✓ Workspace URL copied to clipboard';
+            this.renderIDE();
+          }
+        } else if (key.toLowerCase() === 'w') { // 'W' -> Copy Curl Command
+          if (this.activeTab === 'uploads') {
+            const upload = this.workspaceUploads[this.selectedUploadIndex];
+            if (upload) {
+              const cmd = `curl -fL -o "${upload.originalName}" "https://jeeban.life/s/${upload._id}"`;
+              copyToClipboard(this.stream, cmd);
+              this.statusMessage = '✓ Curl command copied to clipboard';
+              this.renderIDE();
+            }
+          }
+        } else if (key.toLowerCase() === 's' && this.activeTab === 'uploads') { // 'S' -> Copy SCP Command in Uploads tab
+          const upload = this.workspaceUploads[this.selectedUploadIndex];
+          if (upload) {
+            const cmd = `scp -P 2222 jeeban.life:${this.room}/"${upload.originalName}" ./`;
+            copyToClipboard(this.stream, cmd);
+            this.statusMessage = '✓ SCP command copied to clipboard';
+            this.renderIDE();
+          }
+        } else if (key.toLowerCase() === 's' && this.activeTab === 'files') { // 'S' -> Switch Space in Files tab
+          await this.handleSwitchWorkspace();
         } else if (key.toLowerCase() === 'n') { // New File
           await this.handleCreateNewFile();
         } else if (key.toLowerCase() === 'd') { // Delete File
           await this.handleDeleteFile();
         } else if (key.toLowerCase() === 'u') { // SCP Guide
           await this.showScpGuideModal();
-        } else if (key.toLowerCase() === 's') { // Switch Space
-          await this.handleSwitchWorkspace();
         } else if (key.toLowerCase() === 'r') { // Refresh
           this.statusMessage = 'Refreshing workspace...';
           await this.fetchWorkspaceData();
+          this.statusMessage = '✓ Workspace refreshed';
           this.renderIDE();
         } else if (key.toLowerCase() === 'q' || key === '\x03') { // Quit / Ctrl+C
           this.stream.removeListener('data', handleInput);
           this.write('\x1b[?25h'); // Restore cursor
           this.clearScreen();
-          this.writeln(`${C.green}[INFO] Session terminated. Goodbye.${C.reset}`);
+          this.writeln(`${C.mint}[INFO] Session terminated. Goodbye.${C.reset}`);
           this.stream.end();
           resolve();
         }
@@ -439,58 +790,10 @@ class TerminalSession {
     });
   }
 
-  // ── Download Uploaded File into Workspace ─────────────────────────
-  async handleDownloadUpload() {
-    const uploadItem = this.workspaceUploads[this.selectedUploadIndex];
-    if (!uploadItem) return;
-
-    this.isEditing = true;
-    this.write('\x1b[?25h');
-    this.clearScreen();
-
-    this.writeln(`${C.pink}┌── [ DOWNLOAD UPLOAD TO WORKSPACE ] ────────────────────────────────────┐${C.reset}`);
-    this.writeln(`${C.pink}│${C.reset} File : ${C.green}${uploadItem.originalName}${C.reset} (${((uploadItem.size || 0) / 1024).toFixed(2)} KB)`);
-    this.writeln(`${C.pink}│${C.reset} This will save the uploaded file into your active workspace tree.      ${C.pink}│${C.reset}`);
-    this.writeln(`${C.pink}└───────────────────────────────────────────────────────────────────────┘${C.reset}\n`);
-
-    const confirm = await this.prompt(`Download '${uploadItem.originalName}' into workspace? (Y/n): `);
-    if (confirm.toLowerCase() === 'n' || this.isCancel(confirm)) {
-      this.statusMessage = 'Download cancelled.';
-    } else {
-      try {
-        const fileRes = await axios.get(`${this.backendUrl}/api/uploads/share/${uploadItem._id}`, {
-          responseType: 'text',
-        });
-
-        await axios.post(`${this.backendUrl}/api/codespaces/${this.room}/file`, {
-          fileName: uploadItem.originalName,
-          path: '',
-          content: fileRes.data || '',
-          language: this.detectLanguage(uploadItem.originalName),
-        });
-
-        this.statusMessage = `Downloaded '${uploadItem.originalName}' into workspace files!`;
-        this.activeTab = 'files'; // Switch view to files so the user immediately sees it
-        await this.fetchWorkspaceData();
-        const downloadedIdx = this.workspaceFiles.findIndex((f) => f.name === uploadItem.originalName);
-        if (downloadedIdx >= 0) {
-          this.selectedFileIndex = downloadedIdx;
-          this.currentFile = this.workspaceFiles[downloadedIdx];
-        }
-      } catch (err) {
-        this.statusMessage = `Download failed: ${err.message}`;
-      }
-    }
-
-    this.write('\x1b[?25l');
-    this.isEditing = false;
-    this.renderIDE();
-  }
-
   // ── Save Current File Helper ────────────────────────────────────
   async saveCurrentFile() {
     if (!this.currentFile) {
-      this.statusMessage = 'No file open to save.';
+      this.statusMessage = '✗ No file open to save';
       this.renderIDE();
       return;
     }
@@ -502,30 +805,29 @@ class TerminalSession {
         content: this.currentFile.content || '',
         language: this.detectLanguage(this.currentFile.name),
       });
-      this.statusMessage = `[SAVED] '${this.currentFile.name}' saved successfully!`;
+      this.statusMessage = `✓ Saved '${this.currentFile.name}'`;
     } catch (err) {
-      this.statusMessage = `Save failed: ${err.message}`;
+      this.statusMessage = `✗ Save failed: ${err.message}`;
     }
     this.renderIDE();
   }
 
-  // ── Direct Interactive Inline Write / Paste Mode ('i' to write, 'o' to save) ──
+  // ── Direct Interactive Inline Write / Paste Mode ─────────────────
   async handleDirectInlineEdit() {
     if (!this.currentFile) {
       if (this.workspaceFiles.length > 0) {
         this.currentFile = this.workspaceFiles[0];
       } else {
-        this.statusMessage = 'Create a file first with [N] before writing.';
+        this.statusMessage = 'Create a file first with [N] before writing';
         this.renderIDE();
         return;
       }
     }
 
     this.isEditing = true;
-    this.statusMessage = `[INSERT MODE] Type or paste text. Press [Ctrl+O] to SAVE, or [Esc] to cancel.`;
+    this.statusMessage = `Editing '${this.currentFile.name}'`;
     this.renderIDE();
 
-    // Prepare buffer of lines from current file content
     const lines = this.currentFile.content ? this.currentFile.content.split('\n') : [''];
     let currentLine = '';
 
@@ -549,17 +851,17 @@ class TerminalSession {
         // Check for Escape to cancel
         if (str === '\x1b') {
           this.stream.removeListener('data', onData);
-          this.statusMessage = 'Cancelled editing without saving.';
+          this.statusMessage = 'Cancelled editing';
           this.isEditing = false;
           this.renderIDE();
           resolve();
           return;
         }
 
-        // Process characters / pasted text (allows typing 'o' and 'O' normally!)
+        // Process typed characters
         for (let i = 0; i < str.length; i++) {
           const char = str[i];
-          if (char === '\x0f') { // Ctrl+O inside multi-character chunk
+          if (char === '\x0f') {
             this.stream.removeListener('data', onData);
             if (currentLine) {
               lines.push(currentLine);
@@ -594,86 +896,20 @@ class TerminalSession {
     });
   }
 
-  // ── Paste / Edit File Content (Legacy Prompt) ────────────────────
-  async handlePasteIntoCurrentFile() {
-    this.isEditing = true;
-    this.write('\x1b[?25h');
-    this.clearScreen();
-
-    const targetFile = this.currentFile ? this.currentFile.name : 'index.html';
-
-    this.writeln(`${C.pink}┌── [ PASTE / EDIT CONTENT ] ───────────────────────────────────────────┐${C.reset}`);
-    this.writeln(`${C.pink}│${C.reset} Target File : ${C.green}${targetFile}${C.reset}`);
-    this.writeln(`${C.pink}│${C.reset} Paste your code/text below.                                            ${C.pink}│${C.reset}`);
-    this.writeln(`${C.pink}│${C.reset} Type ${C.bold}:wq${C.reset} on a new line and press Enter to save.                       ${C.pink}│${C.reset}`);
-    this.writeln(`${C.pink}│${C.reset} Type ${C.bold}:q${C.reset} on a new line to cancel without saving.                       ${C.pink}│${C.reset}`);
-    this.writeln(`${C.pink}└───────────────────────────────────────────────────────────────────────┘${C.reset}\n`);
-
-    this.writeln(`${C.green}[INPUT] Paste content (finish with :wq):${C.reset}`);
-
-    const lines = [];
-    const rl = readline.createInterface({ input: this.stream, output: this.stream, terminal: true });
-
-    await new Promise((resolve) => {
-      rl.on('SIGINT', () => {
-        lines.length = 0;
-        rl.close();
-        resolve();
-      });
-
-      rl.on('line', (line) => {
-        if (line.trim() === ':wq') {
-          rl.close();
-          resolve();
-        } else if (line.trim() === ':q!' || line.trim() === ':q') {
-          lines.length = 0;
-          rl.close();
-          resolve();
-        } else {
-          lines.push(line);
-        }
-      });
-    });
-
-    this.stream.resume();
-
-    if (lines.length > 0) {
-      const content = lines.join('\n');
-      try {
-        await axios.post(`${this.backendUrl}/api/codespaces/${this.room}/file`, {
-          fileName: targetFile,
-          path: this.currentFile?.path || '',
-          content,
-          language: this.detectLanguage(targetFile),
-        });
-        this.statusMessage = `Saved ${lines.length} lines to '${targetFile}'!`;
-        await this.fetchWorkspaceData();
-      } catch (err) {
-        this.statusMessage = `Save failed: ${err.message}`;
-      }
-    } else {
-      this.statusMessage = 'Edit cancelled. File unchanged.';
-    }
-
-    this.write('\x1b[?25l');
-    this.isEditing = false;
-    this.renderIDE();
-  }
-
   // ── Create New File in Workspace ─────────────────────────────────
   async handleCreateNewFile() {
     this.isEditing = true;
-    this.write('\x1b[?25h');
+    this.write('\x1b[?25h'); // Show cursor
     this.clearScreen();
 
-    this.writeln(`${C.pink}┌── [ CREATE NEW FILE ] ────────────────────────────────────────────────┐${C.reset}`);
-    this.writeln(`${C.pink}│${C.reset} Enter new file name (e.g. script.js, styles.css, README.md)             ${C.pink}│${C.reset}`);
-    this.writeln(`${C.pink}│${C.reset} Press Enter or type ':q' to cancel.                                    ${C.pink}│${C.reset}`);
-    this.writeln(`${C.pink}└───────────────────────────────────────────────────────────────────────┘${C.reset}\n`);
+    this.writeln(`${C.rose}╭─ [ CREATE NEW FILE ] ─────────────────────────────────────────────────╮${C.reset}`);
+    this.writeln(`${C.rose}│${C.reset} Enter new file name (e.g. script.js, styles.css, README.md)             ${C.rose}│${C.reset}`);
+    this.writeln(`${C.rose}│${C.reset} Press Enter or type ':q' to cancel.                                    ${C.rose}│${C.reset}`);
+    this.writeln(`${C.rose}╰───────────────────────────────────────────────────────────────────────╯${C.reset}\n`);
 
     const fileName = await this.prompt('File Name: ');
     if (this.isCancel(fileName)) {
-      this.statusMessage = 'File creation cancelled.';
+      this.statusMessage = 'File creation cancelled';
     } else {
       try {
         await axios.post(`${this.backendUrl}/api/codespaces/${this.room}/file`, {
@@ -688,9 +924,9 @@ class TerminalSession {
           this.currentFile = created;
           this.selectedFileIndex = this.workspaceFiles.indexOf(created);
         }
-        this.statusMessage = `Created '${fileName}'. Press [P] to paste content.`;
+        this.statusMessage = `✓ Created '${fileName}'. Press [i] to write.`;
       } catch (err) {
-        this.statusMessage = `Failed to create file: ${err.message}`;
+        this.statusMessage = `✗ Failed to create file: ${err.message}`;
       }
     }
 
@@ -707,20 +943,25 @@ class TerminalSession {
     this.write('\x1b[?25h');
     this.clearScreen();
 
-    const confirm = await this.prompt(`Delete file '${this.currentFile.name}'? (y/N): `);
+    this.writeln(`${C.rose}╭─ [ DELETE FILE ] ─────────────────────────────────────────────────────╮${C.reset}`);
+    this.writeln(`${C.rose}│${C.reset} Are you sure you want to permanently delete:                           ${C.rose}│${C.reset}`);
+    this.writeln(`${C.rose}│${C.reset}   ${C.roseBright}${this.currentFile.name}${C.reset}`);
+    this.writeln(`${C.rose}╰───────────────────────────────────────────────────────────────────────╯${C.reset}\n`);
+
+    const confirm = await this.prompt(`Delete '${this.currentFile.name}'? (y/N): `);
     if (confirm.toLowerCase() === 'y') {
       try {
         await axios.delete(`${this.backendUrl}/api/codespaces/${this.room}/file`, {
           data: { fileName: this.currentFile.name, path: this.currentFile.path || '' },
         });
-        this.statusMessage = `Deleted '${this.currentFile.name}'.`;
+        this.statusMessage = `✓ Deleted '${this.currentFile.name}'`;
         this.currentFile = null;
         await this.fetchWorkspaceData();
       } catch (err) {
-        this.statusMessage = `Delete failed: ${err.message}`;
+        this.statusMessage = `✗ Delete failed: ${err.message}`;
       }
     } else {
-      this.statusMessage = 'Delete cancelled.';
+      this.statusMessage = 'Delete cancelled';
     }
 
     this.write('\x1b[?25l');
@@ -735,17 +976,17 @@ class TerminalSession {
     this.clearScreen();
 
     const userHint = this.user ? this.user.username : '<username>';
-    this.writeln(`${C.pink}┌── [ DIRECT LOCAL SCP UPLOAD GUIDE ] ───────────────────────────────────┐${C.reset}`);
-    this.writeln(`${C.pink}│${C.reset} You can upload files directly using your CodeCollab username!          ${C.pink}│${C.reset}`);
-    this.writeln(`${C.pink}│${C.reset}                                                                        ${C.pink}│${C.reset}`);
-    this.writeln(`${C.pink}│${C.reset}   ${C.bold}${C.green}scp -P 2222 <local-file> ${userHint}@jeeban.life:${this.room}/${C.reset}`);
-    this.writeln(`${C.pink}│${C.reset}                                                                        ${C.pink}│${C.reset}`);
-    this.writeln(`${C.pink}│${C.reset} Examples:                                                              ${C.pink}│${C.reset}`);
-    this.writeln(`${C.pink}│${C.reset}   scp -P 2222 app.zip ${userHint}@jeeban.life:${this.room}/`);
-    this.writeln(`${C.pink}│${C.reset}   scp -P 2222 document.pdf ${userHint}@jeeban.life:${this.room}/`);
-    this.writeln(`${C.pink}│${C.reset}                                                                        ${C.pink}│${C.reset}`);
-    this.writeln(`${C.pink}│${C.reset} Enter your CodeCollab account password when prompted.                  ${C.pink}│${C.reset}`);
-    this.writeln(`${C.pink}└───────────────────────────────────────────────────────────────────────┘${C.reset}\n`);
+    this.writeln(`${C.rose}╭─ [ DIRECT LOCAL SCP UPLOAD GUIDE ] ───────────────────────────────────╮${C.reset}`);
+    this.writeln(`${C.rose}│${C.reset} You can upload files directly using your CodeCollab username!          ${C.rose}│${C.reset}`);
+    this.writeln(`${C.rose}│${C.reset}                                                                        ${C.rose}│${C.reset}`);
+    this.writeln(`${C.rose}│${C.reset}   ${C.bold}${C.mint}scp -P 2222 <local-file> ${userHint}@jeeban.life:${this.room}/${C.reset}`);
+    this.writeln(`${C.rose}│${C.reset}                                                                        ${C.rose}│${C.reset}`);
+    this.writeln(`${C.rose}│${C.reset} Examples:                                                              ${C.rose}│${C.reset}`);
+    this.writeln(`${C.rose}│${C.reset}   scp -P 2222 app.zip ${userHint}@jeeban.life:${this.room}/`);
+    this.writeln(`${C.rose}│${C.reset}   scp -P 2222 document.pdf ${userHint}@jeeban.life:${this.room}/`);
+    this.writeln(`${C.rose}│${C.reset}                                                                        ${C.rose}│${C.reset}`);
+    this.writeln(`${C.rose}│${C.reset} Enter your CodeCollab account password when prompted.                  ${C.rose}│${C.reset}`);
+    this.writeln(`${C.rose}╰───────────────────────────────────────────────────────────────────────╯${C.reset}\n`);
 
     await this.prompt('Press [Enter] to return to IDE... ');
     this.write('\x1b[?25l');
@@ -759,13 +1000,17 @@ class TerminalSession {
     this.write('\x1b[?25h');
     this.clearScreen();
 
-    const newSpace = await this.prompt(`Enter workspace name [current: ${this.room}]: `);
+    this.writeln(`${C.rose}╭─ [ SWITCH WORKSPACE ] ────────────────────────────────────────────────╮${C.reset}`);
+    this.writeln(`${C.rose}│${C.reset} Enter workspace name (e.g. general, my-project, team-demo)             ${C.rose}│${C.reset}`);
+    this.writeln(`${C.rose}╰───────────────────────────────────────────────────────────────────────╯${C.reset}\n`);
+
+    const newSpace = await this.prompt(`Workspace [current: ${this.room}]: `);
     if (!this.isCancel(newSpace) && /^[a-zA-Z0-9_-]+$/.test(newSpace)) {
       this.room = newSpace.toLowerCase();
       this.currentFile = null;
       this.selectedFileIndex = 0;
       await this.fetchWorkspaceData();
-      this.statusMessage = `Switched to workspace '${this.room}'`;
+      this.statusMessage = `✓ Switched to '${this.room}'`;
     }
 
     this.write('\x1b[?25l');
@@ -783,6 +1028,45 @@ class TerminalSession {
       rs: 'rust', sql: 'sql', yml: 'yaml', yaml: 'yaml',
     };
     return map[ext] || 'plaintext';
+  }
+
+  // Non-interactive piped execution (e.g. cat file | ssh ...)
+  async handlePipedExecution(commandString) {
+    const args = (commandString || '').split(/\s+/);
+    let targetRoom = this.room;
+    let targetFile = `upload_${Date.now()}.txt`;
+
+    for (let i = 0; i < args.length; i++) {
+      if (args[i] === '--room' && args[i + 1]) targetRoom = args[i + 1];
+      if (args[i] === '--file' && args[i + 1]) targetFile = args[i + 1];
+    }
+
+    const chunks = [];
+    this.stream.on('data', (d) => chunks.push(d));
+    this.stream.on('end', async () => {
+      const buffer = Buffer.concat(chunks);
+      const content = buffer.toString('utf8');
+
+      if (!content.trim()) {
+        this.stream.write('[WARN] No piped input received.\n');
+        this.stream.end();
+        return;
+      }
+
+      try {
+        await axios.post(`${this.backendUrl}/api/codespaces/${targetRoom}/file`, {
+          fileName: targetFile,
+          content,
+          language: this.detectLanguage(targetFile),
+        });
+
+        this.stream.write(`[OK] Piped content (${buffer.length} bytes) saved to '${targetFile}' in workspace '${targetRoom}'.\n`);
+        this.stream.write(`URL: https://jeeban.life/${targetRoom}\n`);
+      } catch (err) {
+        this.stream.write(`[ERROR] Failed to save piped content: ${err.message}\n`);
+      }
+      this.stream.end();
+    });
   }
 }
 
