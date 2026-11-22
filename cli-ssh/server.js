@@ -255,9 +255,17 @@ const server = new Server(
       .on('authentication', async (ctx) => {
         const username = (ctx.username || '').trim();
 
-        // 1. Accept 'none' immediately:
-        // This ensures `ssh -p 2222 jeeban.life` connects DIRECTLY into the TUI without asking for password!
+        // 1. Method 'none':
+        // When running `ssh -p 2222 jeeban.life`, OpenSSH uses the local OS username.
+        // If a specific username is explicitly passed (e.g. `scp user@host` or `ssh user@host`),
+        // we MUST NOT accept 'none'; we must challenge with password / keyboard-interactive!
+        // We only accept 'none' when no username was explicitly provided by the user.
         if (ctx.method === 'none') {
+          // If username was explicitly specified in the command (like 'jeeban' or an email), challenge for password!
+          if (username && username !== 'root' && username.toLowerCase() !== 'guest' && !username.includes('.')) {
+            return ctx.reject(['password', 'keyboard-interactive']);
+          }
+          // Default instant guest access for `ssh -p 2222 jeeban.life`
           return ctx.accept();
         }
 
