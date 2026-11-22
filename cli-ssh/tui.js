@@ -118,7 +118,18 @@ function formatTimeAgo(dateInput) {
 function copyToClipboard(stream, text) {
   if (!stream || !stream.writable) return;
   const b64 = Buffer.from(text, 'utf8').toString('base64');
+  // 1. Standard OSC 52 for clipboard ('c') with BEL
   stream.write(`\x1b]52;c;${b64}\x07`);
+  // 2. OSC 52 for primary selection ('p') with BEL (Linux middle-click selection)
+  stream.write(`\x1b]52;p;${b64}\x07`);
+  // 3. ST-terminated variants (\x1b\\)
+  stream.write(`\x1b]52;c;${b64}\x1b\\`);
+  stream.write(`\x1b]52;p;${b64}\x1b\\`);
+  // 4. Tmux passthrough
+  stream.write(`\x1bPtmux;\x1b\x1b]52;c;${b64}\x07\x1b\\`);
+  stream.write(`\x1bPtmux;\x1b\x1b]52;p;${b64}\x07\x1b\\`);
+  // 5. GNU Screen passthrough
+  stream.write(`\x1bP\x1b]52;c;${b64}\x07\x1b\\`);
 }
 
 function highlightSyntax(codeLine) {
@@ -735,33 +746,25 @@ class TerminalSession {
             const upload = this.workspaceUploads[this.selectedUploadIndex];
             if (upload) {
               const url = `https://jeeban.life/s/${upload._id}`;
-              copyToClipboard(this.stream, url);
-              this.statusMessage = '✓ Share URL copied to clipboard';
-              this.renderIDE();
+              await this.showCopyModal('Share URL', url, 'Share URL');
             }
           } else {
             const url = `https://jeeban.life/${this.room}`;
-            copyToClipboard(this.stream, url);
-            this.statusMessage = '✓ Workspace URL copied to clipboard';
-            this.renderIDE();
+            await this.showCopyModal('Workspace URL', url, 'Workspace URL');
           }
         } else if (key.toLowerCase() === 'w') { // 'W' -> Copy Curl Command
           if (this.activeTab === 'uploads') {
             const upload = this.workspaceUploads[this.selectedUploadIndex];
             if (upload) {
               const cmd = `curl -fL -o "${upload.originalName}" "https://jeeban.life/s/${upload._id}"`;
-              copyToClipboard(this.stream, cmd);
-              this.statusMessage = '✓ Curl command copied to clipboard';
-              this.renderIDE();
+              await this.showCopyModal('Curl Command', cmd, 'Curl Command');
             }
           }
         } else if (key.toLowerCase() === 's' && this.activeTab === 'uploads') { // 'S' -> Copy SCP Command in Uploads tab
           const upload = this.workspaceUploads[this.selectedUploadIndex];
           if (upload) {
             const cmd = `scp -P 2222 jeeban.life:${this.room}/"${upload.originalName}" ./`;
-            copyToClipboard(this.stream, cmd);
-            this.statusMessage = '✓ SCP command copied to clipboard';
-            this.renderIDE();
+            await this.showCopyModal('SCP Command', cmd, 'SCP Command');
           }
         } else if (key.toLowerCase() === 's' && this.activeTab === 'files') { // 'S' -> Switch Space in Files tab
           await this.handleSwitchWorkspace();
@@ -966,6 +969,44 @@ class TerminalSession {
 
     this.write('\x1b[?25l');
     this.isEditing = false;
+    this.renderIDE();
+  }
+
+  // ── Show Copy Modal (Supports OSC 52 + GNOME Terminal triple-click copy) ──
+  async showCopyModal(title, textToCopy, label = 'Command') {
+    copyToClipboard(this.stream, textToCopy);
+
+    this.isEditing = true;
+    this.write('\x1b[?25h'); // Show cursor so user can select with mouse
+    this.clearScreen();
+
+    const cols = Math.max(76, this.pty.cols || 80);
+    const boxW = Math.min(cols - 4, 76);
+
+    this.writeln(`${C.rose}╭─ [ ${title.toUpperCase()} ] ${'─'.repeat(Math.max(0, boxW - title.length - 8))}╮${C.reset}`);
+    this.writeln(`${C.rose}│${C.reset} ${C.mint}✓ Sent to clipboard via OSC 52${C.reset} ${C.textMuted}(Kitty, Alacritty, VS Code, etc.)${C.reset}`);
+    this.writeln(`${C.rose}│${C.reset} ${C.textMuted}In GNOME Terminal (blocks OSC 52), copy the clean command below:${C.reset}`);
+    this.writeln(`${C.rose}│${C.reset} ${C.textMuted}(Triple-click the command line to select, then press Ctrl+Shift+C)${C.reset}`);
+    this.writeln(`${C.rose}╰${'─'.repeat(Math.max(0, boxW - 2))}╯${C.reset}\n`);
+
+    // The raw command line WITHOUT any borders or vertical bars on that row
+    // This allows mouse triple-click in GNOME Terminal to select ONLY the exact command!
+    this.writeln(`${C.bold}${C.textMain}${textToCopy}${C.reset}\n`);
+
+    this.writeln(`${C.rose}${'─'.repeat(boxW)}${C.reset}`);
+    this.writeln(`${C.textMuted}Press [Enter], [Esc], or any key to return to IDE...${C.reset}`);
+
+    await new Promise((resolve) => {
+      const onKey = () => {
+        this.stream.removeListener('data', onKey);
+        resolve();
+      };
+      this.stream.on('data', onKey);
+    });
+
+    this.write('\x1b[?25l'); // Hide cursor again
+    this.isEditing = false;
+    this.statusMessage = `✓ ${label} copied`;
     this.renderIDE();
   }
 
