@@ -298,7 +298,7 @@ class TerminalSession {
         rightLines.push(`  ${C.pink}No uploaded files found in this workspace.${C.reset}`);
         rightLines.push('');
         rightLines.push(`  Upload files directly from your terminal:`);
-        rightLines.push(`  ${C.green}scp -P 2222 <local-file> ${this.user ? this.user.username : '<username>'}@jeeban.life:${this.room}/${C.reset}`);
+        rightLines.push(`  ${C.green}scp -P 2222 <local-file> <your-username>@jeeban.life:${this.room}/${C.reset}`);
       }
     }
 
@@ -736,7 +736,7 @@ class TerminalSession {
 
     const userHint = this.user ? this.user.username : '<username>';
     this.writeln(`${C.pink}┌── [ DIRECT LOCAL SCP UPLOAD GUIDE ] ───────────────────────────────────┐${C.reset}`);
-    this.writeln(`${C.pink}│${C.reset} You can upload files directly from your computer terminal!             ${C.pink}│${C.reset}`);
+    this.writeln(`${C.pink}│${C.reset} You can upload files directly using your CodeCollab username!          ${C.pink}│${C.reset}`);
     this.writeln(`${C.pink}│${C.reset}                                                                        ${C.pink}│${C.reset}`);
     this.writeln(`${C.pink}│${C.reset}   ${C.bold}${C.green}scp -P 2222 <local-file> ${userHint}@jeeban.life:${this.room}/${C.reset}`);
     this.writeln(`${C.pink}│${C.reset}                                                                        ${C.pink}│${C.reset}`);
@@ -744,7 +744,7 @@ class TerminalSession {
     this.writeln(`${C.pink}│${C.reset}   scp -P 2222 app.zip ${userHint}@jeeban.life:${this.room}/`);
     this.writeln(`${C.pink}│${C.reset}   scp -P 2222 document.pdf ${userHint}@jeeban.life:${this.room}/`);
     this.writeln(`${C.pink}│${C.reset}                                                                        ${C.pink}│${C.reset}`);
-    this.writeln(`${C.pink}│${C.reset} Uploaded files will appear in the [2] UPLOADS tab automatically!        ${C.pink}│${C.reset}`);
+    this.writeln(`${C.pink}│${C.reset} Enter your CodeCollab account password when prompted.                  ${C.pink}│${C.reset}`);
     this.writeln(`${C.pink}└───────────────────────────────────────────────────────────────────────┘${C.reset}\n`);
 
     await this.prompt('Press [Enter] to return to IDE... ');
