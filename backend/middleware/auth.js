@@ -32,8 +32,19 @@ const requireAuth = (req, res, next) => {
   });
 };
 
+// Middleware that strictly requires admin role
+const requireAdmin = (req, res, next) => {
+  optionalAuth(req, res, () => {
+    if (!req.user || (req.user.role !== 'admin' && req.user.username?.toLowerCase() !== 'admin')) {
+      return res.status(403).json({ message: 'Administrator privileges required.' });
+    }
+    next();
+  });
+};
+
 module.exports = {
   optionalAuth,
   requireAuth,
+  requireAdmin,
   JWT_SECRET,
 };

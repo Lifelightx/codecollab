@@ -273,10 +273,14 @@ class TerminalSession {
     });
   }
 
+  getAuthHeaders() {
+    return this.token ? { headers: { Authorization: `Bearer ${this.token}` } } : {};
+  }
+
   // ── Fetch Workspace Data ─────────────────────────────────────────
   async fetchWorkspaceData() {
     try {
-      const res = await axios.get(`${this.backendUrl}/api/codespaces/${this.room}`);
+      const res = await axios.get(`${this.backendUrl}/api/codespaces/${this.room}`, this.getAuthHeaders());
       const space = res.data;
       this.workspaceFiles = (space.files || []).filter((f) => !f.isFolder);
 
@@ -290,11 +294,12 @@ class TerminalSession {
         if (updated) this.currentFile = updated;
       }
     } catch (e) {
-      this.statusMessage = `✗ Error fetching files: ${e.message}`;
+      this.workspaceFiles = [];
+      this.statusMessage = `✗ Error: ${e.response?.data?.message || e.message}`;
     }
 
     try {
-      const uploadRes = await axios.get(`${this.backendUrl}/api/uploads?spaceName=${this.room}`);
+      const uploadRes = await axios.get(`${this.backendUrl}/api/uploads?spaceName=${this.room}`, this.getAuthHeaders());
       this.workspaceUploads = uploadRes.data?.uploads || [];
     } catch {
       this.workspaceUploads = [];
@@ -666,10 +671,16 @@ class TerminalSession {
     this.writeln(`${C.rose}╰───────────────────────────────────────────────────────────────────────╯${C.reset}\n`);
 
     const requestedRoom = await this.prompt('Workspace Name [default: general]: ');
+    let target = 'general';
     if (requestedRoom && requestedRoom !== '__cancel__' && /^[a-zA-Z0-9_-]+$/.test(requestedRoom)) {
-      this.room = requestedRoom.toLowerCase();
-    } else {
+      target = requestedRoom.toLowerCase();
+    }
+    const isAdmin = this.user && (this.user.role === 'admin' || this.user.username?.toLowerCase() === 'admin');
+    if (target === 'admin' && !isAdmin) {
+      this.statusMessage = "✗ Access denied: 'admin' space is private to administrator.";
       this.room = 'general';
+    } else {
+      this.room = target;
     }
 
     this.write('\x1b[?25l'); // Hide cursor
@@ -807,10 +818,10 @@ class TerminalSession {
         path: this.currentFile.path || '',
         content: this.currentFile.content || '',
         language: this.detectLanguage(this.currentFile.name),
-      });
+      }, this.getAuthHeaders());
       this.statusMessage = `✓ Saved '${this.currentFile.name}'`;
     } catch (err) {
-      this.statusMessage = `✗ Save failed: ${err.message}`;
+      this.statusMessage = `✗ Save failed: ${err.response?.data?.message || err.message}`;
     }
     this.renderIDE();
   }
@@ -920,7 +931,7 @@ class TerminalSession {
           path: '',
           content: '',
           language: this.detectLanguage(fileName),
-        });
+        }, this.getAuthHeaders());
         await this.fetchWorkspaceData();
         const created = this.workspaceFiles.find((f) => f.name === fileName);
         if (created) {
@@ -929,7 +940,7 @@ class TerminalSession {
         }
         this.statusMessage = `✓ Created '${fileName}'. Press [i] to write.`;
       } catch (err) {
-        this.statusMessage = `✗ Failed to create file: ${err.message}`;
+        this.statusMessage = `✗ Failed to create file: ${err.response?.data?.message || err.message}`;
       }
     }
 
@@ -956,12 +967,13 @@ class TerminalSession {
       try {
         await axios.delete(`${this.backendUrl}/api/codespaces/${this.room}/file`, {
           data: { fileName: this.currentFile.name, path: this.currentFile.path || '' },
+          ...this.getAuthHeaders(),
         });
         this.statusMessage = `✓ Deleted '${this.currentFile.name}'`;
         this.currentFile = null;
         await this.fetchWorkspaceData();
       } catch (err) {
-        this.statusMessage = `✗ Delete failed: ${err.message}`;
+        this.statusMessage = `✗ Delete failed: ${err.response?.data?.message || err.message}`;
       }
     } else {
       this.statusMessage = 'Delete cancelled';
@@ -1047,11 +1059,17 @@ class TerminalSession {
 
     const newSpace = await this.prompt(`Workspace [current: ${this.room}]: `);
     if (!this.isCancel(newSpace) && /^[a-zA-Z0-9_-]+$/.test(newSpace)) {
-      this.room = newSpace.toLowerCase();
-      this.currentFile = null;
-      this.selectedFileIndex = 0;
-      await this.fetchWorkspaceData();
-      this.statusMessage = `✓ Switched to '${this.room}'`;
+      const target = newSpace.toLowerCase();
+      const isAdmin = this.user && (this.user.role === 'admin' || this.user.username?.toLowerCase() === 'admin');
+      if (target === 'admin' && !isAdmin) {
+        this.statusMessage = "✗ Access denied: 'admin' space is private to administrator.";
+      } else {
+        this.room = target;
+        this.currentFile = null;
+        this.selectedFileIndex = 0;
+        await this.fetchWorkspaceData();
+        this.statusMessage = `✓ Switched to '${this.room}'`;
+      }
     }
 
     this.write('\x1b[?25l');
@@ -1082,6 +1100,14 @@ class TerminalSession {
       if (args[i] === '--file' && args[i + 1]) targetFile = args[i + 1];
     }
 
+    const cleanTargetRoom = (targetRoom || 'general').toLowerCase();
+    const isAdmin = this.user && (this.user.role === 'admin' || this.user.username?.toLowerCase() === 'admin');
+    if (cleanTargetRoom === 'admin' && !isAdmin) {
+      this.stream.write("[ERROR] Access denied: 'admin' space is private to administrator.\n");
+      this.stream.end();
+      return;
+    }
+
     const chunks = [];
     this.stream.on('data', (d) => chunks.push(d));
     this.stream.on('end', async () => {
@@ -1095,16 +1121,16 @@ class TerminalSession {
       }
 
       try {
-        await axios.post(`${this.backendUrl}/api/codespaces/${targetRoom}/file`, {
+        await axios.post(`${this.backendUrl}/api/codespaces/${cleanTargetRoom}/file`, {
           fileName: targetFile,
           content,
           language: this.detectLanguage(targetFile),
-        });
+        }, this.getAuthHeaders());
 
-        this.stream.write(`[OK] Piped content (${buffer.length} bytes) saved to '${targetFile}' in workspace '${targetRoom}'.\n`);
-        this.stream.write(`URL: https://jeeban.life/${targetRoom}\n`);
+        this.stream.write(`[OK] Piped content (${buffer.length} bytes) saved to '${targetFile}' in workspace '${cleanTargetRoom}'.\n`);
+        this.stream.write(`URL: https://jeeban.life/${cleanTargetRoom}\n`);
       } catch (err) {
-        this.stream.write(`[ERROR] Failed to save piped content: ${err.message}\n`);
+        this.stream.write(`[ERROR] Failed to save piped content: ${err.response?.data?.message || err.message}\n`);
       }
       this.stream.end();
     });

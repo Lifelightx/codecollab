@@ -24,7 +24,12 @@ const userSchema = new mongoose.Schema({
     type: Boolean,
     default: true,
   },
-  // Storage tracked in bytes (max 200MB = 200 * 1024 * 1024 = 209,715,200)
+  role: {
+    type: String,
+    enum: ['user', 'admin'],
+    default: 'user',
+  },
+  // Storage tracked in bytes (max 200MB for users, 2GB for admin)
   storageUsedBytes: {
     type: Number,
     default: 0,

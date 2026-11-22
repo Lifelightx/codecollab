@@ -65,6 +65,16 @@ async function handleScp(stream, command, backendUrl, authUser, authToken) {
     }
   }
 
+  // ── Guard 'admin' space: Only administrator can download or upload ──
+  const cleanRoom = (room || 'general').toLowerCase();
+  const isAdmin = authUser && (authUser.role === 'admin' || authUser.username?.toLowerCase() === 'admin');
+  if (cleanRoom === 'admin' && !isAdmin) {
+    stream.write(Buffer.from("\x02scp: Access denied. The 'admin' space is private to the administrator.\n"));
+    if (typeof stream.exit === 'function') stream.exit(1);
+    stream.end();
+    return;
+  }
+
   // ── 1. SCP Download Handler (User runs: scp -P 2222 host:room/filename ./) ──
   if (isDownload) {
     try {
@@ -72,7 +82,8 @@ async function handleScp(stream, command, backendUrl, authUser, authToken) {
       let fileBuffer = null;
       let finalName = requestedFileName || 'downloaded_file';
 
-      const spaceRes = await axios.get(`${backendUrl}/api/codespaces/${room}`);
+      const authHeaders = authToken ? { headers: { Authorization: `Bearer ${authToken}` } } : {};
+      const spaceRes = await axios.get(`${backendUrl}/api/codespaces/${room}`, authHeaders);
       const files = spaceRes.data?.files || [];
       const matchFile = files.find((f) => !f.isFolder && (f.name === finalName || (f.path ? `${f.path}/${f.name}` : f.name) === cleanTarget.slice(room.length + 1)));
 
@@ -81,11 +92,11 @@ async function handleScp(stream, command, backendUrl, authUser, authToken) {
         finalName = matchFile.name;
       } else {
         // Look in uploads
-        const uploadsRes = await axios.get(`${backendUrl}/api/uploads?spaceName=${room}`);
+        const uploadsRes = await axios.get(`${backendUrl}/api/uploads?spaceName=${room}`, authHeaders);
         const uploads = uploadsRes.data?.uploads || [];
         const matchUpload = uploads.find((u) => u.originalName === finalName || u._id === finalName);
         if (matchUpload) {
-          const dlRes = await axios.get(`${backendUrl}/api/uploads/share/${matchUpload._id}`, { responseType: 'arraybuffer' });
+          const dlRes = await axios.get(`${backendUrl}/api/uploads/share/${matchUpload._id}`, { ...authHeaders, responseType: 'arraybuffer' });
           fileBuffer = Buffer.from(dlRes.data);
           finalName = matchUpload.originalName;
         }

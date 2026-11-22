@@ -13,7 +13,12 @@ const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
 const generateToken = (user) => {
   return jwt.sign(
-    { id: user._id, email: user.email, username: user.username },
+    {
+      id: user._id,
+      email: user.email,
+      username: user.username,
+      role: user.role || (user.username?.toLowerCase() === 'admin' ? 'admin' : 'user'),
+    },
     JWT_SECRET,
     { expiresIn: '30d' }
   );
@@ -190,7 +195,9 @@ router.post('/verify-otp', async (req, res) => {
         id: user._id,
         email: user.email,
         username: user.username,
+        role: user.role || 'user',
         storageUsedBytes: user.storageUsedBytes,
+        quotaBytes: (user.role === 'admin' || user.username?.toLowerCase() === 'admin') ? 2 * 1024 * 1024 * 1024 : 200 * 1024 * 1024,
       },
     });
   } catch (err) {
@@ -363,7 +370,9 @@ router.post('/login', async (req, res) => {
         id: user._id,
         email: user.email,
         username: user.username,
+        role: user.role || 'user',
         storageUsedBytes: user.storageUsedBytes,
+        quotaBytes: (user.role === 'admin' || user.username?.toLowerCase() === 'admin') ? 2 * 1024 * 1024 * 1024 : 200 * 1024 * 1024,
       },
     });
   } catch (err) {

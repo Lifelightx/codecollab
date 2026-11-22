@@ -1,15 +1,40 @@
+const jwt = require('jsonwebtoken');
 const Codespace = require('../models/codeSpace');
 const User = require('../models/User');
 const logger = require('../utils/logger');
 const { websocketConnectedClients, websocketEventsCounter } = require('../utils/metrics');
+const { JWT_SECRET } = require('../middleware/auth');
+const { recordAuditEvent } = require('../utils/auditLogger');
 
 const GUEST_MAX_BYTES = 2 * 1024 * 1024; // 2MB limit for guest spaces
 const USER_MAX_BYTES = 200 * 1024 * 1024; // 200MB limit for signed-in user
 
+function getSocketUser(socket) {
+    try {
+        let token = socket.handshake.auth?.token || socket.handshake.query?.token;
+        if (!token && socket.handshake.headers?.cookie) {
+            const match = socket.handshake.headers.cookie.match(/(?:^|;\s*)token=([^;]+)/);
+            if (match) token = match[1];
+        }
+        if (token) {
+            return jwt.verify(token, JWT_SECRET);
+        }
+    } catch {}
+    return null;
+}
+
+function getSocketIp(socket) {
+    const forwarded = socket.handshake.headers?.['x-forwarded-for'];
+    if (forwarded) {
+        return forwarded.split(',')[0].trim();
+    }
+    return socket.handshake.address || socket.conn?.remoteAddress || 'unknown';
+}
+
 const initializeSocket = (io) => {
     io.on('connection', (socket) => {
         websocketConnectedClients.inc();
-        logger.info(`Client connected: ${socket.id} [IP: ${socket.handshake.address || 'unknown'}]`, null, 'SOCKET');
+        logger.info(`Client connected: ${socket.id} [IP: ${getSocketIp(socket)}]`, null, 'SOCKET');
 
         socket.on('disconnect', (reason) => {
             websocketConnectedClients.dec();
@@ -20,6 +45,18 @@ const initializeSocket = (io) => {
             websocketEventsCounter.inc({ event: 'join-space' });
             if (!spaceName) return;
             const normalized = spaceName.toLowerCase();
+
+            // Protect 'admin' space from unauthorized sockets
+            if (normalized === 'admin') {
+                const user = getSocketUser(socket);
+                const isAdmin = user && (user.role === 'admin' || user.username?.toLowerCase() === 'admin');
+                if (!isAdmin) {
+                    logger.warn(`Unauthorized socket attempt to join 'admin' space from ${getSocketIp(socket)}`, null, 'SOCKET');
+                    socket.emit('access-denied', { message: "Access denied. The 'admin' space is private to the administrator." });
+                    return;
+                }
+            }
+
             socket.join(normalized);
             logger.info(`Client ${socket.id} joined space: '${normalized}'`, null, 'SOCKET');
             socket.to(normalized).emit('user-joined', { userId: socket.id });
@@ -30,6 +67,14 @@ const initializeSocket = (io) => {
             websocketEventsCounter.inc({ event: 'code-change' });
             if (!spaceName || !file) return;
             const normalized = spaceName.toLowerCase();
+
+            // Guard admin space
+            if (normalized === 'admin') {
+                const user = getSocketUser(socket);
+                const isAdmin = user && (user.role === 'admin' || user.username?.toLowerCase() === 'admin');
+                if (!isAdmin) return;
+            }
+
             socket.to(normalized).emit('code-updated', { file, path: path || '', content });
 
             try {
@@ -74,6 +119,17 @@ const initializeSocket = (io) => {
             websocketEventsCounter.inc({ event: 'create-file' });
             if (!spaceName || !fileName) return;
             const normalized = spaceName.toLowerCase();
+            const user = getSocketUser(socket);
+
+            // Guard admin space
+            if (normalized === 'admin') {
+                const isAdmin = user && (user.role === 'admin' || user.username?.toLowerCase() === 'admin');
+                if (!isAdmin) {
+                    socket.emit('access-denied', { message: "Access denied. Private admin space." });
+                    return;
+                }
+            }
+
             try {
                 const space = await Codespace.findOne({ name: normalized });
                 if (!space) {
@@ -82,7 +138,7 @@ const initializeSocket = (io) => {
                 }
 
                 // Gate folders to signed-in owners only
-                if (isFolder && !space.ownerId) {
+                if (isFolder && !space.ownerId && (!user || user.role !== 'admin')) {
                     logger.warn(`Folder creation blocked in guest space '${normalized}'`, null, 'SOCKET');
                     socket.emit('auth-required', {
                         message: 'Folder creation is only available for signed-in users. Please sign in.',
@@ -114,12 +170,22 @@ const initializeSocket = (io) => {
                 );
 
                 if (updatedCodespace) {
+                    const fullPath = path ? `${path}/${fileName}` : fileName;
                     logger.info(
                         `Created ${isFolder ? 'folder' : 'file'} '${fileName}' in '${normalized}' [Path: '${path || ''}']`,
                         null,
                         'SOCKET'
                     );
                     io.to(normalized).emit('file-created', updatedCodespace.files);
+
+                    // ── Audit Log & Alert Email ──
+                    recordAuditEvent({
+                        action: 'FILE_CREATED',
+                        actor: user || { username: 'socket-client' },
+                        ip: getSocketIp(socket),
+                        spaceName: normalized,
+                        details: `${isFolder ? 'Folder' : 'File'} created via web: '${fullPath}'`,
+                    });
                 }
             } catch (err) {
                 logger.error(`Create file error in '${normalized}' for '${fileName}': ${err.message}`, err, 'SOCKET');
@@ -131,6 +197,17 @@ const initializeSocket = (io) => {
             websocketEventsCounter.inc({ event: 'delete-file' });
             if (!spaceName || !fileName) return;
             const normalized = spaceName.toLowerCase();
+            const user = getSocketUser(socket);
+
+            // Guard admin space
+            if (normalized === 'admin') {
+                const isAdmin = user && (user.role === 'admin' || user.username?.toLowerCase() === 'admin');
+                if (!isAdmin) {
+                    socket.emit('access-denied', { message: "Access denied. Private admin space." });
+                    return;
+                }
+            }
+
             try {
                 const space = await Codespace.findOne({ name: normalized });
                 if (!space) {
@@ -165,6 +242,7 @@ const initializeSocket = (io) => {
                 );
 
                 if (updatedCodespace) {
+                    const fullPath = targetPath ? `${targetPath}/${fileName}` : fileName;
                     logger.info(
                         `Deleted ${targetIsFolder ? 'folder' : 'file'} '${fileName}' in '${normalized}'`,
                         null,
@@ -176,6 +254,15 @@ const initializeSocket = (io) => {
                         isFolder: targetIsFolder, 
                         files: updatedCodespace.files 
                     });
+
+                    // ── Audit Log & Alert Email ──
+                    recordAuditEvent({
+                        action: 'FILE_DELETED',
+                        actor: user || { username: 'socket-client' },
+                        ip: getSocketIp(socket),
+                        spaceName: normalized,
+                        details: `${targetIsFolder ? 'Folder' : 'File'} deleted via web: '${fullPath}'`,
+                    });
                 }
             } catch (err) {
                 logger.error(`Delete file error in '${normalized}' for '${fileName}': ${err.message}`, err, 'SOCKET');
@@ -186,6 +273,7 @@ const initializeSocket = (io) => {
             websocketEventsCounter.inc({ event: 'privacy-change' });
             if (!spaceName) return;
             const normalized = spaceName.toLowerCase();
+            if (normalized === 'admin') return; // Cannot modify admin space privacy
             logger.info(`Privacy updated in '${normalized}': isPublic=${isPublic}, hasPasscode=${!!hasPasscode}`, null, 'SOCKET');
             socket.to(normalized).emit('privacy-updated', { isPublic, hasPasscode });
         });

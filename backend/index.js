@@ -17,6 +17,7 @@ const initializeSocket = require('./socket/socketHandler');
 const codespaceApiRoutes = require('./routes/codeSpaceApi');
 const authRoutes = require('./routes/authApi');
 const uploadRoutes = require('./routes/uploadApi');
+const initAdminAndSpace = require('./utils/initAdmin');
 
 const app = express();
 
@@ -44,8 +45,9 @@ const mongoUri = process.env.MONGO_URI || 'mongodb://localhost:27017/appdb';
 logger.info('Connecting to MongoDB...', null, 'DB');
 
 mongoose.connect(mongoUri)
-  .then(() => {
+  .then(async () => {
     logger.info(`MongoDB connected successfully [Host: ${mongoose.connection.host}, DB: ${mongoose.connection.name}]`, null, 'DB');
+    await initAdminAndSpace();
   })
   .catch((err) => {
     logger.error(`MongoDB connection failed: ${err.message}`, err, 'DB');
@@ -108,15 +110,30 @@ app.use('/api/uploads', uploadRoutes);
 
 // Public share: GET /s/:id → serve file by MongoDB _id (clean URL, no filename exposed)
 const Upload = require('./models/Upload');
+const Codespace = require('./models/codeSpace');
+const { optionalAuth } = require('./middleware/auth');
 const UPLOAD_DIR = path.join(__dirname, 'uploads');
 
-app.get('/s/:id', async (req, res, next) => {
+app.get('/s/:id', optionalAuth, async (req, res, next) => {
   try {
     const doc = await Upload.findById(req.params.id);
     if (!doc) {
       logger.warn(`Shared file not found in DB: ${req.params.id}`, null, 'SHARE');
       return res.status(404).send('Not found');
     }
+
+    // Protect files belonging to private 'admin' space
+    if (doc.spaceId) {
+      const space = await Codespace.findById(doc.spaceId);
+      if (space && space.name.toLowerCase() === 'admin') {
+        const isAdmin = req.user && (req.user.role === 'admin' || req.user.username?.toLowerCase() === 'admin');
+        if (!isAdmin) {
+          logger.warn(`Unauthorized attempt to access admin file '${doc.originalName}'`, null, 'SHARE');
+          return res.status(403).send('Forbidden: This file belongs to the private admin space.');
+        }
+      }
+    }
+
     const filePath = path.join(UPLOAD_DIR, doc.storedName);
     if (!fs.existsSync(filePath)) {
       logger.error(`Shared file missing on disk: ${filePath}`, null, 'SHARE');

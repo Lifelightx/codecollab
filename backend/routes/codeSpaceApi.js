@@ -3,9 +3,23 @@ const Codespace = require('../models/codeSpace');
 const User = require('../models/User');
 const logger = require('../utils/logger');
 const { optionalAuth, requireAuth } = require('../middleware/auth');
+const { recordAuditEvent, getClientIp } = require('../utils/auditLogger');
 
 module.exports = (io) => {
     const router = express.Router();
+
+    // Guard: 'admin' space is permanently restricted to admin role
+    const verifyAdminSpaceGuard = (req, res, next) => {
+        const spaceName = (req.params.name || req.body.name || req.body.spaceName || '').toLowerCase().trim();
+        if (spaceName === 'admin') {
+            const isAdmin = req.user && (req.user.role === 'admin' || req.user.username?.toLowerCase() === 'admin');
+            if (!isAdmin) {
+                logger.warn(`Unauthorized attempt to access 'admin' space [IP: ${getClientIp(req)}]`, null, 'ACCESS');
+                return res.status(403).json({ msg: "Access denied. The 'admin' space is private to the administrator." });
+            }
+        }
+        next();
+    };
 
     // Helper: 3-day retention for guest, 60-day for authenticated
     const getExpirationDate = (isAuthenticated) => {
@@ -14,7 +28,7 @@ module.exports = (io) => {
     };
 
     // Get or Create a Codespace (with optionalAuth to set owner and 60d vs 3d retention)
-    router.post('/', optionalAuth, async (req, res) => {
+    router.post('/', optionalAuth, verifyAdminSpaceGuard, async (req, res) => {
         const { name } = req.body;
         if (!name) {
             return res.status(400).json({ msg: 'Codespace name is required' });
@@ -41,10 +55,13 @@ module.exports = (io) => {
                 return res.json(codespace);
             } else {
                 const isAuth = !!req.user;
+                const isAdmin = isAuth && (req.user.role === 'admin' || req.user.username?.toLowerCase() === 'admin');
+                const isLifetime = sanitizedName === 'admin' || isAdmin;
                 const newCodespace = new Codespace({
                     name: sanitizedName,
                     ownerId: isAuth ? req.user.id : null,
-                    expiresAt: getExpirationDate(isAuth),
+                    isPublic: sanitizedName === 'admin' ? false : true,
+                    expiresAt: isLifetime ? new Date('2099-12-31T23:59:59Z') : getExpirationDate(isAuth),
                     files: [{ 
                         name: 'index.html', 
                         language: 'html', 
@@ -63,7 +80,7 @@ module.exports = (io) => {
         }
     });
 
-    router.get('/:name', async (req, res) => {
+    router.get('/:name', optionalAuth, verifyAdminSpaceGuard, async (req, res) => {
         try {
             const codespace = await Codespace.findOne({ 
                 $or: [{ name: req.params.name.toLowerCase() }, { customSlug: req.params.name.toLowerCase() }]
@@ -77,7 +94,7 @@ module.exports = (io) => {
         }
     });
 
-    router.post('/:name/verify', async (req, res) => {
+    router.post('/:name/verify', optionalAuth, verifyAdminSpaceGuard, async (req, res) => {
         const { passcode } = req.body;
         try {
             const codespace = await Codespace.findOne({ name: req.params.name.toLowerCase() });
@@ -96,9 +113,13 @@ module.exports = (io) => {
         }
     });
 
-    router.patch('/:name/privacy', async (req, res) => {
+    router.patch('/:name/privacy', optionalAuth, verifyAdminSpaceGuard, async (req, res) => {
         const { name } = req.params;
         const { isPublic, passcode } = req.body;
+
+        if (name.toLowerCase() === 'admin') {
+            return res.status(400).json({ msg: "The 'admin' space cannot be made public. It is permanently private." });
+        }
 
         try {
             const updatedCodespace = await Codespace.findOneAndUpdate(
@@ -118,6 +139,10 @@ module.exports = (io) => {
                 hasPasscode: !!updatedCodespace.passcode,
             });
         } catch (error) {
+            logger.error(`Update privacy error for '${req.params.name}': ${error.message}`, error, 'CODESPACE');
+            res.status(500).json({ msg: 'Server error', error });
+        }
+    });
             logger.error(`Update privacy error for '${req.params.name}': ${error.message}`, error, 'CODESPACE');
             res.status(500).json({ msg: 'Server error', error });
         }
@@ -154,7 +179,7 @@ module.exports = (io) => {
         }
     });
 
-    router.get('/:name/status', async (req, res) => {
+    router.get('/:name/status', optionalAuth, verifyAdminSpaceGuard, async (req, res) => {
         try {
             const codespace = await Codespace.findOne({ 
                 $or: [{ name: req.params.name.toLowerCase() }, { customSlug: req.params.name.toLowerCase() }]
@@ -174,7 +199,7 @@ module.exports = (io) => {
         }
     });
 
-    router.post('/:name/data', async (req, res) => {
+    router.post('/:name/data', optionalAuth, verifyAdminSpaceGuard, async (req, res) => {
         const { passcode } = req.body;
 
         try {
@@ -196,7 +221,7 @@ module.exports = (io) => {
     });
 
     // Save or update file from CLI / API
-    router.post('/:name/file', async (req, res) => {
+    router.post('/:name/file', optionalAuth, verifyAdminSpaceGuard, async (req, res) => {
         const { fileName, path = '', content = '', language = 'plaintext' } = req.body;
         if (!fileName) {
             return res.status(400).json({ msg: 'fileName is required' });
@@ -208,9 +233,12 @@ module.exports = (io) => {
 
             if (!space) {
                 // Auto create space if doesn't exist
+                const isAuth = !!req.user;
+                const isAdmin = isAuth && (req.user.role === 'admin' || req.user.username?.toLowerCase() === 'admin');
                 space = new Codespace({
                     name: spaceName,
-                    expiresAt: getExpirationDate(false),
+                    ownerId: isAuth ? req.user.id : null,
+                    expiresAt: (spaceName === 'admin' || isAdmin) ? new Date('2099-12-31T23:59:59Z') : getExpirationDate(isAuth),
                     files: []
                 });
             }
@@ -234,6 +262,15 @@ module.exports = (io) => {
                 });
                 await space.save();
                 io.to(spaceName).emit('file-created', space.files);
+
+                // Audit log & self alert for new file
+                recordAuditEvent({
+                    action: 'FILE_CREATED',
+                    actor: req.user,
+                    ip: getClientIp(req),
+                    spaceName,
+                    details: `File: '${fileName}' [Path: '${path || '/'}'] [Lang: '${language || 'plaintext'}']`,
+                });
             }
 
             logger.info(`File '${fileName}' saved via CLI in '${spaceName}'`, null, 'CODESPACE');
@@ -245,7 +282,7 @@ module.exports = (io) => {
     });
 
     // Create folder via CLI / API
-    router.post('/:name/folder', async (req, res) => {
+    router.post('/:name/folder', optionalAuth, verifyAdminSpaceGuard, async (req, res) => {
         const { folderName, path = '' } = req.body;
         if (!folderName) {
             return res.status(400).json({ msg: 'folderName is required' });
@@ -255,9 +292,12 @@ module.exports = (io) => {
             const spaceName = req.params.name.toLowerCase();
             let space = await Codespace.findOne({ name: spaceName });
             if (!space) {
+                const isAuth = !!req.user;
+                const isAdmin = isAuth && (req.user.role === 'admin' || req.user.username?.toLowerCase() === 'admin');
                 space = new Codespace({
                     name: spaceName,
-                    expiresAt: getExpirationDate(false),
+                    ownerId: isAuth ? req.user.id : null,
+                    expiresAt: (spaceName === 'admin' || isAdmin) ? new Date('2099-12-31T23:59:59Z') : getExpirationDate(isAuth),
                     files: []
                 });
             }
@@ -277,6 +317,15 @@ module.exports = (io) => {
                 });
                 await space.save();
                 io.to(spaceName).emit('file-created', space.files);
+
+                // Audit log & self alert for new folder
+                recordAuditEvent({
+                    action: 'FILE_CREATED',
+                    actor: req.user,
+                    ip: getClientIp(req),
+                    spaceName,
+                    details: `Folder: '${folderName}' [Path: '${cleanPath || '/'}']`,
+                });
             }
 
             logger.info(`Folder '${folderName}' created in '${spaceName}' [Path: '${cleanPath}']`, null, 'CODESPACE');
@@ -287,7 +336,7 @@ module.exports = (io) => {
         }
     });
 
-    router.delete("/:name/delete", async (req, res) => {
+    router.delete("/:name/delete", optionalAuth, verifyAdminSpaceGuard, async (req, res) => {
         const { file, path, isFolder } = req.body;
 
         try {
@@ -328,6 +377,15 @@ module.exports = (io) => {
                 path: targetPath, 
                 isFolder: targetIsFolder, 
                 files: codespace.files 
+            });
+
+            // Audit log & self alert for deleted file
+            recordAuditEvent({
+                action: 'FILE_DELETED',
+                actor: req.user,
+                ip: getClientIp(req),
+                spaceName,
+                details: `${targetIsFolder ? 'Folder' : 'File'}: '${file}' [Path: '${targetPath || '/'}']`,
             });
 
             logger.info(`Deleted ${targetIsFolder ? 'folder' : 'file'} '${file}' from codespace '${spaceName}'`, null, 'CODESPACE');
