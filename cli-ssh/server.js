@@ -256,29 +256,27 @@ const server = new Server(
         const username = (ctx.username || '').trim();
 
         // 1. Method 'none':
-        // When running `ssh -p 2222 jeeban.life`, OpenSSH uses the local OS username.
-        // If a specific username is explicitly passed (e.g. `scp user@host` or `ssh user@host`),
-        // we MUST NOT accept 'none'; we must challenge with password / keyboard-interactive!
-        // We only accept 'none' when no username was explicitly provided by the user.
         if (ctx.method === 'none') {
-          // If username was explicitly specified in the command (like 'jeeban' or an email), challenge for password!
+          // If username was explicitly provided in the command (e.g. `scp user@host`),
+          // challenge ONLY with standard SSH 'password' authentication!
           if (username && username !== 'root' && username.toLowerCase() !== 'guest' && !username.includes('.')) {
-            return ctx.reject(['password', 'keyboard-interactive']);
+            return ctx.reject(['password']);
           }
           // Default instant guest access for `ssh -p 2222 jeeban.life`
           return ctx.accept();
         }
 
-        // 2. Keyboard-Interactive Auth (if requested by client or scp)
+        // 2. Keyboard-Interactive Auth (if username was already provided, only prompt for password)
         if (ctx.method === 'keyboard-interactive') {
-          const prompts = [
-            { prompt: 'Email: ', echo: true },
-            { prompt: 'Password: ', echo: false },
-          ];
+          const prompts = [];
+          if (!username || username === 'root' || username.toLowerCase() === 'guest') {
+            prompts.push({ prompt: 'Email: ', echo: true });
+          }
+          prompts.push({ prompt: 'Password: ', echo: false });
 
           return ctx.prompt(prompts, async (responses) => {
-            const userIdentifier = (responses[0] || '').trim();
-            const pass = responses[1] || '';
+            const userIdentifier = prompts.length === 2 ? (responses[0] || '').trim() : username;
+            const pass = prompts.length === 2 ? responses[1] || '' : responses[0] || '';
 
             if (!userIdentifier || !pass) {
               authAttempts += 1;
@@ -286,7 +284,7 @@ const server = new Server(
                 client.end();
                 return ctx.reject();
               }
-              return ctx.reject(['keyboard-interactive']);
+              return ctx.reject(['password', 'keyboard-interactive']);
             }
 
             try {
@@ -306,12 +304,12 @@ const server = new Server(
                 client.end();
                 return ctx.reject();
               }
-              return ctx.reject(['keyboard-interactive']);
+              return ctx.reject(['password', 'keyboard-interactive']);
             }
           });
         }
 
-        // 3. Password Auth (when user runs `scp -P 2222 file user@jeeban.life:room/`)
+        // 3. Password Auth (standard SSH password prompt: `jeeban@jeeban.life's password:`)
         if (ctx.method === 'password') {
           try {
             const res = await axios.post(`${BACKEND_URL}/api/auth/login`, {
