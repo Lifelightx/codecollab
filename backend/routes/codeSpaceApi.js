@@ -143,10 +143,6 @@ module.exports = (io) => {
             res.status(500).json({ msg: 'Server error', error });
         }
     });
-            logger.error(`Update privacy error for '${req.params.name}': ${error.message}`, error, 'CODESPACE');
-            res.status(500).json({ msg: 'Server error', error });
-        }
-    });
 
     // Custom Slug (Vanity URL) endpoint - Authenticated only
     router.post('/:name/custom-slug', requireAuth, async (req, res) => {

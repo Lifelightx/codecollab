@@ -10,7 +10,7 @@ async function initAdminAndSpace() {
 
     // 1. Ensure Admin User exists and has role: 'admin'
     let admin = await User.findOne({
-      $or: [{ username: adminUsername }, { role: 'admin' }]
+      $or: [{ username: adminUsername }, { role: 'admin' }, { email: adminEmail }]
     });
 
     if (!admin) {
