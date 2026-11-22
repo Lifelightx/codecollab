@@ -268,28 +268,22 @@ const server = new Server(
 
         // 2. Keyboard-Interactive Auth (Prompts for Email/Username & Password)
         if (ctx.method === 'keyboard-interactive') {
-          const prompts = [];
-          if (!username || username === 'root' || username.toLowerCase() === 'guest' || username.includes('@') || username.includes('.')) {
-            prompts.push({ prompt: 'CodeCollab Email or Username (Enter for Guest): ', echo: true });
-          }
-          prompts.push({ prompt: 'Password: ', echo: false });
+          const prompts = [
+            { prompt: 'Email: ', echo: true },
+            { prompt: 'Password: ', echo: false },
+          ];
 
           return ctx.prompt(prompts, async (responses) => {
-            let userIdentifier = username;
-            let pass = '';
+            const userIdentifier = (responses[0] || '').trim();
+            const pass = responses[1] || '';
 
-            if (prompts.length === 2) {
-              userIdentifier = (responses[0] || '').trim();
-              pass = responses[1] || '';
-            } else {
-              pass = responses[0] || '';
-            }
-
-            // Allow empty or guest login for interactive shell
-            if (!userIdentifier || userIdentifier.toLowerCase() === 'guest') {
-              authUser = null;
-              authToken = null;
-              return ctx.accept();
+            if (!userIdentifier || !pass) {
+              authAttempts += 1;
+              if (authAttempts >= 3) {
+                client.end();
+                return ctx.reject();
+              }
+              return ctx.reject(['keyboard-interactive']);
             }
 
             try {
