@@ -259,10 +259,12 @@ const server = new Server(
         if (ctx.method === 'none') {
           // If username was explicitly provided in the command (e.g. `scp user@host`),
           // challenge ONLY with standard SSH 'password' authentication!
-          if (username && username !== 'root' && username.toLowerCase() !== 'guest' && !username.includes('.')) {
+          // Common local OS usernames like 'ubuntu', 'root', 'guest', or names with dots should not be challenged
+          const isLocalOsUser = !username || username === 'ubuntu' || username === 'root' || username.toLowerCase() === 'guest' || username.includes('.');
+          if (!isLocalOsUser) {
             return ctx.reject(['password']);
           }
-          // Default instant guest access for `ssh -p 2222 jeeban.life`
+          // Default instant access for anonymous `ssh -p 2222 jeeban.life` and download `scp -P 2222 jeeban.life:room/file ./`
           return ctx.accept();
         }
 

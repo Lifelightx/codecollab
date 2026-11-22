@@ -289,9 +289,9 @@ class TerminalSession {
         rightLines.push(`  ${C.green}│${C.reset} scp -P 2222 jeeban.life:${this.room}/"${selectedUpload.originalName}" ./`);
         rightLines.push(`  ${C.green}└─────────────────────────────────────────────────────────────────────┘${C.reset}`);
         rightLines.push('');
-        rightLines.push(`  ${C.bold}${C.pink}Or via Curl:${C.reset}`);
+        rightLines.push(`  ${C.bold}${C.pink}Or via Curl (saves with original filename):${C.reset}`);
         rightLines.push(`  ${C.green}┌── [ CURL COMMAND ] ─────────────────────────────────────────────────┐${C.reset}`);
-        rightLines.push(`  ${C.green}│${C.reset} curl -O https://jeeban.life/s/${selectedUpload._id}`);
+        rightLines.push(`  ${C.green}│${C.reset} curl -L -o "${selectedUpload.originalName}" https://jeeban.life/s/${selectedUpload._id}`);
         rightLines.push(`  ${C.green}└─────────────────────────────────────────────────────────────────────┘${C.reset}`);
       } else {
         rightLines.push('');
