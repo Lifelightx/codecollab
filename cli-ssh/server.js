@@ -255,18 +255,13 @@ const server = new Server(
       .on('authentication', async (ctx) => {
         const username = (ctx.username || '').trim();
 
-        // If client connects with method 'none':
-        // 1. If username was provided by command line (e.g. `scp -P 2222 file user@host:room` or `ssh user@host`),
-        //    or if connecting without an interactive pseudo-terminal, we challenge with 'keyboard-interactive'.
-        // 2. Only if connecting for interactive shell without custom user do we accept 'none'.
-        // To support `scp -P 2222 file jeeban.life:room/` asking for Email & Password:
-        // When OpenSSH runs scp, it requests keyboard-interactive if 'none' is rejected with ['keyboard-interactive'].
-        // For `ssh -p 2222 jeeban.life`, OpenSSH requests a shell afterwards, so if we prompt, the user can just press Enter for guest!
+        // 1. Accept 'none' immediately:
+        // This ensures `ssh -p 2222 jeeban.life` connects DIRECTLY into the TUI without asking for password!
         if (ctx.method === 'none') {
-          return ctx.reject(['keyboard-interactive', 'password']);
+          return ctx.accept();
         }
 
-        // 2. Keyboard-Interactive Auth (Prompts for Email/Username & Password)
+        // 2. Keyboard-Interactive Auth (if requested by client or scp)
         if (ctx.method === 'keyboard-interactive') {
           const prompts = [
             { prompt: 'Email: ', echo: true },
@@ -308,7 +303,7 @@ const server = new Server(
           });
         }
 
-        // 3. Password Auth
+        // 3. Password Auth (when user runs `scp -P 2222 file user@jeeban.life:room/`)
         if (ctx.method === 'password') {
           try {
             const res = await axios.post(`${BACKEND_URL}/api/auth/login`, {
@@ -327,11 +322,11 @@ const server = new Server(
               client.end();
               return ctx.reject();
             }
-            return ctx.reject(['keyboard-interactive']);
+            return ctx.reject(['password']);
           }
         }
 
-        ctx.reject(['keyboard-interactive']);
+        ctx.reject(['keyboard-interactive', 'password']);
       })
       .on('ready', () => {
         console.log(`[SSH] Client session ready: ${clientIp} (${authUser ? authUser.username : 'Guest'})`);
