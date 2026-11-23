@@ -404,4 +404,20 @@ router.post('/logout', (req, res) => {
   res.json({ message: 'Signed out successfully' });
 });
 
+// GET /api/auth/exists/:username (Quick lookup for SSH server to distinguish registered users from guest OS users)
+router.get('/exists/:username', async (req, res) => {
+  try {
+    const raw = (req.params.username || '').trim().toLowerCase();
+    if (!raw || raw === 'guest') {
+      return res.json({ exists: false });
+    }
+    const user = await User.findOne({
+      $or: [{ username: raw }, { email: raw }]
+    });
+    return res.json({ exists: !!user });
+  } catch {
+    return res.json({ exists: false });
+  }
+});
+
 module.exports = router;

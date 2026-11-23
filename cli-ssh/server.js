@@ -266,32 +266,40 @@ const server = new Server(
       .on('authentication', async (ctx) => {
         const username = (ctx.username || '').trim();
 
-        // 1. Method 'none':
-        if (ctx.method === 'none') {
-          // If username was explicitly provided in the command (e.g. `scp user@host`),
-          // challenge ONLY with standard SSH 'password' authentication!
-          // Common local OS usernames like 'ubuntu', 'root', 'guest', or names with dots should not be challenged
-          const isLocalOsUser = !username || username === 'ubuntu' || username === 'root' || username.toLowerCase() === 'guest' || username.includes('.');
-          if (!isLocalOsUser) {
-            return ctx.reject(['password']);
+        // Dynamically check if username corresponds to a registered account in CodeCollab
+        let isRegistered = false;
+        if (username && username.toLowerCase() !== 'guest') {
+          try {
+            const checkRes = await axios.get(
+              `${BACKEND_URL}/api/auth/exists/${encodeURIComponent(username)}`,
+              { timeout: 2000 }
+            );
+            isRegistered = !!checkRes.data?.exists;
+          } catch {
+            isRegistered = false;
           }
-          // Default instant access for anonymous `ssh -p 2222 jeeban.life` and download `scp -P 2222 jeeban.life:room/file ./`
+        }
+
+        // 1. Unregistered username or explicit 'guest' (e.g. laptop user 'apmosys', termux 'u0_a1284', or 'guest'):
+        // Instantly accept as Guest without password or publickey challenges!
+        if (!isRegistered) {
           return ctx.accept();
         }
 
-        // 2. Keyboard-Interactive Auth (if username was already provided, only prompt for password)
+        // 2. User IS registered in CodeCollab (e.g. 'admin', 'jeeban', 'hitesh'):
+        // Challenge for password
+        if (ctx.method === 'none' || ctx.method === 'publickey') {
+          return ctx.reject(['password', 'keyboard-interactive']);
+        }
+
+        // 3. Keyboard-Interactive Auth
         if (ctx.method === 'keyboard-interactive') {
-          const prompts = [];
-          if (!username || username === 'root' || username.toLowerCase() === 'guest') {
-            prompts.push({ prompt: 'Email: ', echo: true });
-          }
-          prompts.push({ prompt: 'Password: ', echo: false });
+          const prompts = [{ prompt: 'Password: ', echo: false }];
 
           return ctx.prompt(prompts, async (responses) => {
-            const userIdentifier = prompts.length === 2 ? (responses[0] || '').trim() : username;
-            const pass = prompts.length === 2 ? responses[1] || '' : responses[0] || '';
+            const pass = responses[0] || '';
 
-            if (!userIdentifier || !pass) {
+            if (!pass) {
               authAttempts += 1;
               if (authAttempts >= 3) {
                 client.end();
@@ -302,7 +310,7 @@ const server = new Server(
 
             try {
               const res = await axios.post(`${BACKEND_URL}/api/auth/login`, {
-                identifier: userIdentifier,
+                identifier: username,
                 password: pass,
               });
 
@@ -312,7 +320,7 @@ const server = new Server(
               return ctx.accept();
             } catch (err) {
               authAttempts += 1;
-              console.warn(`[SSH] Login failed (${authAttempts}/3) for '${userIdentifier}': ${err.response?.data?.message || err.message}`);
+              console.warn(`[SSH] Login failed (${authAttempts}/3) for '${username}': ${err.response?.data?.message || err.message}`);
               if (authAttempts >= 3) {
                 client.end();
                 return ctx.reject();
@@ -322,7 +330,7 @@ const server = new Server(
           });
         }
 
-        // 3. Password Auth (standard SSH password prompt: `jeeban@jeeban.life's password:`)
+        // 4. Password Auth (standard SSH password prompt: `jeeban@jeeban.life's password:`)
         if (ctx.method === 'password') {
           try {
             const res = await axios.post(`${BACKEND_URL}/api/auth/login`, {
@@ -345,7 +353,7 @@ const server = new Server(
           }
         }
 
-        ctx.reject(['keyboard-interactive', 'password']);
+        ctx.reject(['password', 'keyboard-interactive']);
       })
       .on('ready', () => {
         console.log(`[SSH] Client session ready: ${clientIp} (${authUser ? authUser.username : 'Guest'})`);
