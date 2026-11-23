@@ -218,6 +218,7 @@ class TerminalSession {
     this.currentFile = null;
     this.statusMessage = '● Connected';
     this.isEditing = false;
+    this.passcodes = {};
   }
 
   write(text) {
@@ -273,8 +274,121 @@ class TerminalSession {
     });
   }
 
-  getAuthHeaders() {
-    return this.token ? { headers: { Authorization: `Bearer ${this.token}` } } : {};
+  getAuthHeaders(room = this.room) {
+    const headers = {};
+    if (this.token) {
+      headers.Authorization = `Bearer ${this.token}`;
+    }
+    const cleanRoom = (room || this.room || '').toLowerCase();
+    if (this.passcodes && this.passcodes[cleanRoom]) {
+      headers['x-passcode'] = this.passcodes[cleanRoom];
+    }
+    return { headers };
+  }
+
+  // ── Password / Passcode Masked Input Helper ───────────────────────
+  async promptPasscode(promptText = 'Passcode: ') {
+    this.stream.resume();
+    return new Promise((resolve) => {
+      this.write(`${C.roseBright}${promptText}${C.reset}`);
+      let input = '';
+      const onData = (buf) => {
+        const str = buf.toString('utf8');
+        for (let i = 0; i < str.length; i++) {
+          const char = str[i];
+          if (char === '\r' || char === '\n') {
+            this.stream.removeListener('data', onData);
+            this.writeln();
+            resolve(input.trim());
+            return;
+          } else if (char === '\u0003' || char === '\u001b') { // Ctrl+C or Esc
+            this.stream.removeListener('data', onData);
+            this.writeln();
+            resolve('__cancel__');
+            return;
+          } else if (char === '\u0008' || char === '\x7f') { // Backspace
+            if (input.length > 0) {
+              input = input.slice(0, -1);
+              this.write('\b \b');
+            }
+          } else if (char.charCodeAt(0) >= 32) {
+            input += char;
+            this.write('*');
+          }
+        }
+      };
+      this.stream.on('data', onData);
+    });
+  }
+
+  // ── Check if workspace is private and unlock via passcode if needed ──
+  async checkAndUnlockSpace(targetRoom) {
+    const room = (targetRoom || 'general').toLowerCase();
+    const isAdmin = this.user && (this.user.role === 'admin' || this.user.username?.toLowerCase() === 'admin');
+
+    if (room === 'admin' && !isAdmin) {
+      this.statusMessage = "✗ Access denied: 'admin' space is private to administrator.";
+      return false;
+    }
+
+    try {
+      const statusRes = await axios.get(`${this.backendUrl}/api/codespaces/${room}/status`, this.getAuthHeaders(room));
+      const { isPublic, isOwner, hasPasscode } = statusRes.data;
+
+      if (!isPublic && !isOwner && !isAdmin) {
+        if (!hasPasscode) {
+          this.statusMessage = `✗ Workspace '${room}' is private (restricted to owner).`;
+          return false;
+        }
+
+        // Test if already unlocked with stored passcode
+        if (this.passcodes[room]) {
+          try {
+            await axios.get(`${this.backendUrl}/api/codespaces/${room}`, this.getAuthHeaders(room));
+            return true;
+          } catch {
+            delete this.passcodes[room];
+          }
+        }
+
+        // Prompt for passcode modal
+        this.isEditing = true;
+        this.write('\x1b[?25h');
+        this.clearScreen();
+        this.writeln(`${C.rose}╭─ [ PRIVATE WORKSPACE: ${room.toUpperCase()} ] ────────────────────────────────────────╮${C.reset}`);
+        this.writeln(`${C.rose}│${C.reset} This workspace is private and protected by a passcode.                ${C.rose}│${C.reset}`);
+        this.writeln(`${C.rose}│${C.reset} Enter passcode to continue, or press [Enter] / Ctrl+C to cancel.      ${C.rose}│${C.reset}`);
+        this.writeln(`${C.rose}╰───────────────────────────────────────────────────────────────────────╯\r\n`);
+
+        const enteredPasscode = await this.promptPasscode('Enter Passcode: ');
+        this.write('\x1b[?25l');
+        this.isEditing = false;
+
+        if (this.isCancel(enteredPasscode) || !enteredPasscode) {
+          this.statusMessage = 'Access cancelled';
+          return false;
+        }
+
+        this.passcodes[room] = enteredPasscode;
+        try {
+          await axios.get(`${this.backendUrl}/api/codespaces/${room}`, this.getAuthHeaders(room));
+          this.statusMessage = `✓ Unlocked private workspace '${room}'`;
+          return true;
+        } catch (err) {
+          delete this.passcodes[room];
+          this.statusMessage = `✗ Incorrect passcode for '${room}'`;
+          return false;
+        }
+      }
+      return true;
+    } catch (e) {
+      if (e.response?.status === 404) return true; // new space, allow creation
+      if (e.response?.status === 401 || e.response?.status === 403) {
+        this.statusMessage = `✗ Workspace '${room}' is private.`;
+        return false;
+      }
+      return true;
+    }
   }
 
   // ── Fetch Workspace Data ─────────────────────────────────────────
@@ -675,17 +789,16 @@ class TerminalSession {
     if (requestedRoom && requestedRoom !== '__cancel__' && /^[a-zA-Z0-9_-]+$/.test(requestedRoom)) {
       target = requestedRoom.toLowerCase();
     }
-    const isAdmin = this.user && (this.user.role === 'admin' || this.user.username?.toLowerCase() === 'admin');
-    if (target === 'admin' && !isAdmin) {
-      this.statusMessage = "✗ Access denied: 'admin' space is private to administrator.";
-      this.room = 'general';
-    } else {
-      this.room = target;
-    }
+    const unlocked = await this.checkAndUnlockSpace(target);
+    this.room = unlocked ? target : 'general';
 
     this.write('\x1b[?25l'); // Hide cursor
     await this.fetchWorkspaceData();
-    this.statusMessage = '● Connected';
+    if (!unlocked && target !== 'general') {
+      this.statusMessage = `✗ Could not unlock '${target}'. Using 'general'.`;
+    } else {
+      this.statusMessage = '● Connected';
+    }
     this.renderIDE();
 
     // Key event listener
@@ -1060,10 +1173,8 @@ class TerminalSession {
     const newSpace = await this.prompt(`Workspace [current: ${this.room}]: `);
     if (!this.isCancel(newSpace) && /^[a-zA-Z0-9_-]+$/.test(newSpace)) {
       const target = newSpace.toLowerCase();
-      const isAdmin = this.user && (this.user.role === 'admin' || this.user.username?.toLowerCase() === 'admin');
-      if (target === 'admin' && !isAdmin) {
-        this.statusMessage = "✗ Access denied: 'admin' space is private to administrator.";
-      } else {
+      const unlocked = await this.checkAndUnlockSpace(target);
+      if (unlocked) {
         this.room = target;
         this.currentFile = null;
         this.selectedFileIndex = 0;

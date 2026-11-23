@@ -130,7 +130,8 @@ async function handleScp(stream, command, backendUrl, authUser, authToken) {
       stream.once('data', onClientAck);
       return;
     } catch (err) {
-      stream.write(Buffer.from(`\x02scp: Download error: ${err.message}\n`));
+      const msg = err.response?.data?.msg || err.response?.data?.message || err.message;
+      stream.write(Buffer.from(`\x02scp: Download error: ${msg}\n`));
       if (typeof stream.exit === 'function') stream.exit(1);
       stream.end();
       return;
