@@ -39,17 +39,24 @@ function recordAuditEvent({ action, actor, ip, spaceName, details }) {
   // 2. Output to central logger
   logger.info(`[AUDIT] [${action}] ${actorName} | IP: ${safeIp} | Space: ${safeSpace} | ${details}`, null, 'AUDIT');
 
-  // 3. Trigger email notification to self (non-blocking)
-  sendAuditAlertEmail({
-    action,
-    actor: { username: actorName, email: actorEmail, role: actorRole },
-    ip: safeIp,
-    spaceName: safeSpace,
-    details,
-    timestamp,
-  }).catch((err) => {
-    logger.error(`Audit alert email dispatch error: ${err.message}`, err, 'AUDIT');
-  });
+  // 3. Trigger email notification ONLY for admin account or admin space activity
+  const isAdminActivity = 
+    actorRole === 'admin' || 
+    actorName?.toLowerCase() === 'admin' || 
+    safeSpace === 'admin';
+
+  if (isAdminActivity) {
+    sendAuditAlertEmail({
+      action,
+      actor: { username: actorName, email: actorEmail, role: actorRole },
+      ip: safeIp,
+      spaceName: safeSpace,
+      details,
+      timestamp,
+    }).catch((err) => {
+      logger.error(`Audit alert email dispatch error: ${err.message}`, err, 'AUDIT');
+    });
+  }
 }
 
 /**

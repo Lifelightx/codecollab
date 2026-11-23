@@ -117,9 +117,12 @@ function CodeSpacePage() {
     setIsLoading(true);
     setAuthError('');
     try {
+      const token = localStorage.getItem("codecollab_token");
+      const headers = { 'Content-Type': 'application/json' };
+      if (token) headers['Authorization'] = `Bearer ${token}`;
       const res = await fetch(`${API_URL}/codespaces/${spaceName}/data`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers,
         body: JSON.stringify({ passcode }),
       });
 
@@ -131,7 +134,7 @@ function CodeSpacePage() {
       const data = await res.json();
       setFiles(data.files || []);
       setIsPublic(data.isPublic);
-      setIsOwner(!!data.ownerId);
+      setIsOwner(data.isOwner);
       setCustomSlug(data.customSlug || '');
       setExpiresAt(data.expiresAt);
 
@@ -170,7 +173,11 @@ function CodeSpacePage() {
   }, [activeFile, spaceName]);
 
   useEffect(() => {
-    fetch(`${API_URL}/codespaces/${spaceName}/status`)
+    const token = localStorage.getItem("codecollab_token");
+    const headers = {};
+    if (token) headers['Authorization'] = `Bearer ${token}`;
+
+    fetch(`${API_URL}/codespaces/${spaceName}/status`, { headers })
       .then((res) => {
         if (!res.ok) throw new Error('Codespace not found.');
         return res.json();
@@ -179,7 +186,7 @@ function CodeSpacePage() {
         setIsOwner(data.isOwner);
         setCustomSlug(data.customSlug || '');
         setExpiresAt(data.expiresAt);
-        if (data.isPublic) {
+        if (data.isPublic || data.isOwner || data.isAdmin) {
           fetchCodeSpaceData(null);
         } else {
           setIsLoading(false);

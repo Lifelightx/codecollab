@@ -294,17 +294,22 @@ class TerminalSession {
       let input = '';
       const onData = (buf) => {
         const str = buf.toString('utf8');
+        if (str === '\u001b' || str === '\u0003') { // Esc or Ctrl+C
+          this.stream.removeListener('data', onData);
+          this.writeln();
+          resolve('__cancel__');
+          return;
+        }
+        if (str.startsWith('\u001b')) {
+          // Ignore other ANSI escape sequences (arrow keys, etc.)
+          return;
+        }
         for (let i = 0; i < str.length; i++) {
           const char = str[i];
           if (char === '\r' || char === '\n') {
             this.stream.removeListener('data', onData);
             this.writeln();
             resolve(input.trim());
-            return;
-          } else if (char === '\u0003' || char === '\u001b') { // Ctrl+C or Esc
-            this.stream.removeListener('data', onData);
-            this.writeln();
-            resolve('__cancel__');
             return;
           } else if (char === '\u0008' || char === '\x7f') { // Backspace
             if (input.length > 0) {
@@ -333,14 +338,9 @@ class TerminalSession {
 
     try {
       const statusRes = await axios.get(`${this.backendUrl}/api/codespaces/${room}/status`, this.getAuthHeaders(room));
-      const { isPublic, isOwner, hasPasscode } = statusRes.data;
+      const { isPublic, isOwner } = statusRes.data;
 
       if (!isPublic && !isOwner && !isAdmin) {
-        if (!hasPasscode) {
-          this.statusMessage = `✗ Workspace '${room}' is private (restricted to owner).`;
-          return false;
-        }
-
         // Test if already unlocked with stored passcode
         if (this.passcodes[room]) {
           try {

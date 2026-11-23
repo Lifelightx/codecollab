@@ -179,15 +179,22 @@ module.exports = (io) => {
         try {
             const codespace = await Codespace.findOne({ 
                 $or: [{ name: req.params.name.toLowerCase() }, { customSlug: req.params.name.toLowerCase() }]
-            }).select('name isPublic expiresAt ownerId customSlug');
+            }).select('name isPublic expiresAt ownerId customSlug passcode');
             if (!codespace) {
                 return res.status(404).json({ msg: 'Codespace not found.' });
             }
+
+            const isOwner = !!(req.user && codespace.ownerId && codespace.ownerId.toString() === (req.user.id || req.user._id).toString());
+            const isAdmin = !!(req.user && (req.user.role === 'admin' || req.user.username?.toLowerCase() === 'admin'));
+            const hasPasscode = !!codespace.passcode;
+
             res.json({ 
                 name: codespace.name,
                 isPublic: codespace.isPublic,
                 expiresAt: codespace.expiresAt,
-                isOwner: !!codespace.ownerId,
+                isOwner,
+                isAdmin,
+                hasPasscode,
                 customSlug: codespace.customSlug,
             });
         } catch (error) {
@@ -196,7 +203,7 @@ module.exports = (io) => {
     });
 
     router.post('/:name/data', optionalAuth, verifyAdminSpaceGuard, async (req, res) => {
-        const { passcode } = req.body;
+        const passcode = req.body?.passcode || req.headers['x-passcode'];
 
         try {
             const codespace = await Codespace.findOne({ 
@@ -206,10 +213,10 @@ module.exports = (io) => {
                 return res.status(404).json({ msg: 'Codespace not found.' });
             }
 
-            const isOwner = req.user && codespace.ownerId && codespace.ownerId.toString() === (req.user.id || req.user._id).toString();
-            const isAdmin = req.user && (req.user.role === 'admin' || req.user.username?.toLowerCase() === 'admin');
+            const isOwner = !!(req.user && codespace.ownerId && codespace.ownerId.toString() === (req.user.id || req.user._id).toString());
+            const isAdmin = !!(req.user && (req.user.role === 'admin' || req.user.username?.toLowerCase() === 'admin'));
 
-            if (codespace.isPublic || isOwner || isAdmin || codespace.passcode === passcode) {
+            if (codespace.isPublic || isOwner || isAdmin || (codespace.passcode && codespace.passcode === passcode)) {
                 return res.json(codespace);
             } else {
                 return res.status(401).json({ msg: 'Incorrect passcode.' });
@@ -335,8 +342,9 @@ module.exports = (io) => {
         }
     });
 
-    router.delete("/:name/delete", optionalAuth, verifyAdminSpaceGuard, async (req, res) => {
-        const { file, path, isFolder } = req.body;
+    router.delete(["/:name/delete", "/:name/file"], optionalAuth, verifyAdminSpaceGuard, async (req, res) => {
+        const { path, isFolder } = req.body;
+        const file = req.body.file || req.body.fileName;
 
         try {
             const spaceName = req.params.name.toLowerCase();
