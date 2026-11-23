@@ -115,17 +115,6 @@ router.post(
       return res.status(404).json({ message: 'Codespace not found.' });
     }
 
-    // Check space privacy
-    if (!space.isPublic) {
-      const isOwner = req.user && space.ownerId && space.ownerId.toString() === (req.user.id || req.user._id).toString();
-      const reqPasscode = req.headers['x-passcode'] || req.query.passcode || req.body?.passcode;
-      const passcodeMatches = space.passcode && reqPasscode === space.passcode;
-      if (!isOwner && !isAdmin && !passcodeMatches) {
-        req.files.forEach(f => fs.unlink(f.path, () => {}));
-        return res.status(401).json({ message: 'This codespace is private. Passcode required.' });
-      }
-    }
-
     // Dynamic file size limit: 2GB for admin, 200MB for standard users
     const maxFileBytes = isAdmin ? ADMIN_MAX_FILE_BYTES : USER_MAX_FILE_BYTES;
     const maxQuotaBytes = isAdmin ? ADMIN_QUOTA_BYTES : USER_QUOTA_BYTES;
@@ -221,16 +210,6 @@ router.get('/', optionalAuth, async (req, res) => {
 
     const space = await resolveSpace(cleanSpaceName);
     if (!space) return res.status(404).json({ message: 'Codespace not found.' });
-
-    // Check space privacy
-    if (!space.isPublic) {
-      const isOwner = req.user && space.ownerId && space.ownerId.toString() === (req.user.id || req.user._id).toString();
-      const reqPasscode = req.headers['x-passcode'] || req.query.passcode;
-      const passcodeMatches = space.passcode && reqPasscode === space.passcode;
-      if (!isOwner && !isAdmin && !passcodeMatches) {
-        return res.status(401).json({ message: 'This codespace is private. Passcode required.' });
-      }
-    }
 
     const uploads = await Upload.find({ spaceId: space._id }).sort({ createdAt: -1 });
 

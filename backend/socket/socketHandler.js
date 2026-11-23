@@ -41,36 +41,20 @@ const initializeSocket = (io) => {
             logger.info(`Client disconnected: ${socket.id} (Reason: ${reason})`, null, 'SOCKET');
         });
 
-        socket.on('join-space', async ({ spaceName, passcode }) => {
+        socket.on('join-space', async ({ spaceName }) => {
             websocketEventsCounter.inc({ event: 'join-space' });
             if (!spaceName) return;
             const normalized = spaceName.toLowerCase();
-            const user = getSocketUser(socket);
-            const isAdmin = user && (user.role === 'admin' || user.username?.toLowerCase() === 'admin');
 
             // Protect 'admin' space from unauthorized sockets
             if (normalized === 'admin') {
+                const user = getSocketUser(socket);
+                const isAdmin = user && (user.role === 'admin' || user.username?.toLowerCase() === 'admin');
                 if (!isAdmin) {
                     logger.warn(`Unauthorized socket attempt to join 'admin' space from ${getSocketIp(socket)}`, null, 'SOCKET');
                     socket.emit('access-denied', { message: "Access denied. The 'admin' space is private to the administrator." });
                     return;
                 }
-            }
-
-            // Check space privacy
-            try {
-                const space = await Codespace.findOne({ name: normalized });
-                if (space && !space.isPublic) {
-                    const isOwner = user && space.ownerId && space.ownerId.toString() === (user.id || user._id).toString();
-                    const passcodeMatches = space.passcode && space.passcode === passcode;
-                    if (!isOwner && !isAdmin && !passcodeMatches) {
-                        logger.warn(`Unauthorized socket attempt to join private space '${normalized}' from ${getSocketIp(socket)}`, null, 'SOCKET');
-                        socket.emit('access-denied', { message: 'This codespace is private. Passcode required.' });
-                        return;
-                    }
-                }
-            } catch (err) {
-                logger.error(`Error checking space privacy on socket join: ${err.message}`, err, 'SOCKET');
             }
 
             socket.join(normalized);

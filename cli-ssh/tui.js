@@ -344,7 +344,7 @@ class TerminalSession {
         // Test if already unlocked with stored passcode
         if (this.passcodes[room]) {
           try {
-            await axios.get(`${this.backendUrl}/api/codespaces/${room}`, this.getAuthHeaders(room));
+            await axios.post(`${this.backendUrl}/api/codespaces/${room}/data`, { passcode: this.passcodes[room] }, this.getAuthHeaders(room));
             return true;
           } catch {
             delete this.passcodes[room];
@@ -369,9 +369,9 @@ class TerminalSession {
           return false;
         }
 
-        this.passcodes[room] = enteredPasscode;
         try {
-          await axios.get(`${this.backendUrl}/api/codespaces/${room}`, this.getAuthHeaders(room));
+          await axios.post(`${this.backendUrl}/api/codespaces/${room}/data`, { passcode: enteredPasscode }, this.getAuthHeaders(room));
+          this.passcodes[room] = enteredPasscode;
           this.statusMessage = `✓ Unlocked private workspace '${room}'`;
           return true;
         } catch (err) {
@@ -393,8 +393,11 @@ class TerminalSession {
 
   // ── Fetch Workspace Data ─────────────────────────────────────────
   async fetchWorkspaceData() {
+    const cleanRoom = (this.room || 'general').toLowerCase();
+    const payload = { passcode: (this.passcodes && this.passcodes[cleanRoom]) || null };
+
     try {
-      const res = await axios.get(`${this.backendUrl}/api/codespaces/${this.room}`, this.getAuthHeaders());
+      const res = await axios.post(`${this.backendUrl}/api/codespaces/${cleanRoom}/data`, payload, this.getAuthHeaders(cleanRoom));
       const space = res.data;
       this.workspaceFiles = (space.files || []).filter((f) => !f.isFolder);
 
@@ -409,7 +412,7 @@ class TerminalSession {
       }
     } catch (e) {
       this.workspaceFiles = [];
-      this.statusMessage = `✗ Error: ${e.response?.data?.message || e.message}`;
+      this.statusMessage = `✗ Error: ${e.response?.data?.message || e.response?.data?.msg || e.message}`;
     }
 
     try {

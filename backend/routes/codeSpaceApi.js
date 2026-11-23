@@ -27,16 +27,6 @@ module.exports = (io) => {
         return new Date(Date.now() + days * 24 * 60 * 60 * 1000);
     };
 
-    // Helper: Check if caller is authorized to access a private space
-    const canAccessSpace = (space, req) => {
-        if (!space || space.isPublic) return true;
-        const isOwner = req.user && space.ownerId && space.ownerId.toString() === (req.user.id || req.user._id).toString();
-        const isAdmin = req.user && (req.user.role === 'admin' || req.user.username?.toLowerCase() === 'admin');
-        const reqPasscode = req.headers['x-passcode'] || req.query.passcode || req.body?.passcode;
-        const passcodeMatches = space.passcode && reqPasscode === space.passcode;
-        return isOwner || isAdmin || passcodeMatches;
-    };
-
     // Get or Create a Codespace (with optionalAuth to set owner and 60d vs 3d retention)
     router.post('/', optionalAuth, verifyAdminSpaceGuard, async (req, res) => {
         const { name } = req.body;
@@ -50,15 +40,6 @@ module.exports = (io) => {
             let codespace = await Codespace.findOne({ name: sanitizedName });
 
             if (codespace) {
-                // If codespace is private, verify access
-                if (!canAccessSpace(codespace, req)) {
-                    return res.status(401).json({
-                        msg: 'This codespace is private. Passcode required.',
-                        isPrivate: true,
-                        hasPasscode: !!codespace.passcode,
-                    });
-                }
-
                 // If an authenticated user accesses their space, refresh retention by 60 days
                 if (req.user) {
                     if (!codespace.ownerId) {
@@ -107,16 +88,6 @@ module.exports = (io) => {
             if (!codespace) {
                 return res.status(404).json({ msg: 'Codespace not found.' });
             }
-
-            // Check privacy
-            if (!canAccessSpace(codespace, req)) {
-                return res.status(401).json({
-                    msg: 'This codespace is private. Passcode required.',
-                    isPrivate: true,
-                    hasPasscode: !!codespace.passcode,
-                });
-            }
-
             res.json(codespace);
         } catch (error) {
             res.status(500).json({ msg: 'Server Error' });
@@ -235,7 +206,10 @@ module.exports = (io) => {
                 return res.status(404).json({ msg: 'Codespace not found.' });
             }
 
-            if (codespace.isPublic || codespace.passcode === passcode) {
+            const isOwner = req.user && codespace.ownerId && codespace.ownerId.toString() === (req.user.id || req.user._id).toString();
+            const isAdmin = req.user && (req.user.role === 'admin' || req.user.username?.toLowerCase() === 'admin');
+
+            if (codespace.isPublic || isOwner || isAdmin || codespace.passcode === passcode) {
                 return res.json(codespace);
             } else {
                 return res.status(401).json({ msg: 'Incorrect passcode.' });
@@ -255,10 +229,6 @@ module.exports = (io) => {
         try {
             const spaceName = req.params.name.toLowerCase();
             let space = await Codespace.findOne({ name: spaceName });
-
-            if (space && !canAccessSpace(space, req)) {
-                return res.status(401).json({ msg: 'This codespace is private. Passcode required.' });
-            }
 
             if (!space) {
                 // Auto create space if doesn't exist
@@ -320,11 +290,6 @@ module.exports = (io) => {
         try {
             const spaceName = req.params.name.toLowerCase();
             let space = await Codespace.findOne({ name: spaceName });
-
-            if (space && !canAccessSpace(space, req)) {
-                return res.status(401).json({ msg: 'This codespace is private. Passcode required.' });
-            }
-
             if (!space) {
                 const isAuth = !!req.user;
                 const isAdmin = isAuth && (req.user.role === 'admin' || req.user.username?.toLowerCase() === 'admin');
@@ -378,10 +343,6 @@ module.exports = (io) => {
             const space = await Codespace.findOne({ name: spaceName });
             if (!space) {
                 return res.status(404).json({ msg: "Codespace not found." });
-            }
-
-            if (!canAccessSpace(space, req)) {
-                return res.status(401).json({ msg: 'This codespace is private. Passcode required.' });
             }
 
             const target = space.files.find(f => 
