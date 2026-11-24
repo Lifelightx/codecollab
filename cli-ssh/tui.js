@@ -360,24 +360,44 @@ class TerminalSession {
         this.writeln(`${C.rose}│${C.reset} Enter passcode to continue, or press [Enter] / Ctrl+C to cancel.      ${C.rose}│${C.reset}`);
         this.writeln(`${C.rose}╰───────────────────────────────────────────────────────────────────────╯\r\n`);
 
-        const enteredPasscode = await this.promptPasscode('Enter Passcode: ');
-        this.write('\x1b[?25l');
-        this.isEditing = false;
+        let attempts = 0;
+        const maxAttempts = 3;
 
-        if (this.isCancel(enteredPasscode) || !enteredPasscode) {
-          this.statusMessage = 'Access cancelled';
-          return false;
-        }
+        while (attempts < maxAttempts) {
+          const promptLabel = attempts === 0
+            ? 'Enter Passcode: '
+            : 'Try again (or [Enter] to cancel): ';
 
-        try {
-          await axios.post(`${this.backendUrl}/api/codespaces/${room}/data`, { passcode: enteredPasscode }, this.getAuthHeaders(room));
-          this.passcodes[room] = enteredPasscode;
-          this.statusMessage = `✓ Unlocked private workspace '${room}'`;
-          return true;
-        } catch (err) {
-          delete this.passcodes[room];
-          this.statusMessage = `✗ Incorrect passcode for '${room}'`;
-          return false;
+          const enteredPasscode = await this.promptPasscode(promptLabel);
+
+          if (this.isCancel(enteredPasscode) || !enteredPasscode) {
+            this.write('\x1b[?25l');
+            this.isEditing = false;
+            this.statusMessage = 'Access cancelled';
+            return false;
+          }
+
+          try {
+            await axios.post(`${this.backendUrl}/api/codespaces/${room}/data`, { passcode: enteredPasscode }, this.getAuthHeaders(room));
+            this.passcodes[room] = enteredPasscode;
+            this.write('\x1b[?25l');
+            this.isEditing = false;
+            this.statusMessage = `✓ Unlocked private workspace '${room}'`;
+            return true;
+          } catch (err) {
+            attempts++;
+            delete this.passcodes[room];
+            if (attempts < maxAttempts) {
+              this.writeln(`${C.red}✗ Incorrect passcode.${C.reset}\r\n`);
+            } else {
+              this.writeln(`\r\n${C.red}✗ Incorrect passcode. Maximum attempts reached.${C.reset}`);
+              await new Promise((r) => setTimeout(r, 1200));
+              this.write('\x1b[?25l');
+              this.isEditing = false;
+              this.statusMessage = `✗ Incorrect passcode for '${room}'`;
+              return false;
+            }
+          }
         }
       }
       return true;
@@ -781,27 +801,56 @@ class TerminalSession {
   async runInteractive() {
     this.clearScreen();
 
-    // Initial Workspace Setup Modal
-    this.writeln(`${C.rose}╭─ [ CODECOLLAB IDE - WORKSPACE SETUP ] ────────────────────────────────╮${C.reset}`);
-    this.writeln(`${C.rose}│${C.reset} Enter the Space Name you want to collaborate in.                       ${C.rose}│${C.reset}`);
-    this.writeln(`${C.rose}│${C.reset} Press [Enter] for default 'general', or type custom workspace name.     ${C.rose}│${C.reset}`);
-    this.writeln(`${C.rose}╰───────────────────────────────────────────────────────────────────────╯${C.reset}\n`);
-
-    const requestedRoom = await this.prompt('Workspace Name [default: general]: ');
     let target = 'general';
-    if (requestedRoom && requestedRoom !== '__cancel__' && /^[a-zA-Z0-9_-]+$/.test(requestedRoom)) {
-      target = requestedRoom.toLowerCase();
+    let unlocked = false;
+
+    while (true) {
+      this.clearScreen();
+      // Initial Workspace Setup Modal
+      this.writeln(`${C.rose}╭─ [ CODECOLLAB IDE - WORKSPACE SETUP ] ────────────────────────────────╮${C.reset}`);
+      this.writeln(`${C.rose}│${C.reset} Enter the Space Name you want to collaborate in.                       ${C.rose}│${C.reset}`);
+      this.writeln(`${C.rose}│${C.reset} Press [Enter] for default 'general', or type custom workspace name.     ${C.rose}│${C.reset}`);
+      this.writeln(`${C.rose}╰───────────────────────────────────────────────────────────────────────╯${C.reset}\n`);
+
+      const requestedRoom = await this.prompt('Workspace Name [default: general]: ');
+      if (this.isCancel(requestedRoom)) {
+        target = 'general';
+      } else if (/^[a-zA-Z0-9_-]+$/.test(requestedRoom)) {
+        target = requestedRoom.toLowerCase();
+      } else {
+        target = 'general';
+      }
+
+      unlocked = await this.checkAndUnlockSpace(target);
+      if (unlocked) {
+        this.room = target;
+        break;
+      }
+
+      // If user specifically asked for 'general' and it's unlocked, proceed
+      if (target === 'general') {
+        this.room = 'general';
+        break;
+      }
+
+      // If unlocking custom workspace failed, do not silently force user into 'general'!
+      this.clearScreen();
+      this.writeln(`\r\n${C.red}✗ Could not unlock workspace '${target}'.${C.reset}\n`);
+      const choice = await this.prompt(`Press [Enter] to try again, 'g' for general, or 'q' to quit: `);
+      const c = (choice || '').trim().toLowerCase();
+      if (c === 'g' || c === 'general') {
+        this.room = 'general';
+        break;
+      } else if (c === 'q' || c === 'exit' || c === ':q') {
+        this.stream.end();
+        return;
+      }
+      // Otherwise loop back to workspace setup
     }
-    const unlocked = await this.checkAndUnlockSpace(target);
-    this.room = unlocked ? target : 'general';
 
     this.write('\x1b[?25l'); // Hide cursor
     await this.fetchWorkspaceData();
-    if (!unlocked && target !== 'general') {
-      this.statusMessage = `✗ Could not unlock '${target}'. Using 'general'.`;
-    } else {
-      this.statusMessage = '● Connected';
-    }
+    this.statusMessage = unlocked ? `✓ Connected to '${this.room}'` : '● Connected';
     this.renderIDE();
 
     // Key event listener
