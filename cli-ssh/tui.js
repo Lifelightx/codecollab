@@ -212,6 +212,8 @@ class TerminalSession {
     this.fileScrollOffset = 0;
     this.uploadScrollOffset = 0;
     this.editorScrollOffset = 0;
+    this.editCursorRow = 0;
+    this.editCursorCol = 0;
 
     this.workspaceFiles = [];
     this.workspaceUploads = [];
@@ -655,13 +657,27 @@ class TerminalSession {
         // Subheader line matching screenshot
         previewLines.push(` ${C.roseBright}Code${C.reset}  ${C.textMuted}${activeFile.language || 'text'} • ${lines.length} lines${C.reset}`);
 
-        // Code preview with line numbers
+        // Code preview with line numbers and editor cursor
+        const scroll = this.editorScrollOffset || 0;
         for (let i = 0; i < innerRows - 1; i++) {
-          const lineIdx = i;
+          const lineIdx = scroll + i;
           if (lineIdx < lines.length) {
             const lineNum = `${(lineIdx + 1).toString().padStart(3, ' ')} │ `;
-            const highlighted = highlightSyntax(lines[lineIdx]);
-            previewLines.push(` ${C.textDim}${lineNum}${C.reset}${highlighted}`);
+            const lineText = lines[lineIdx];
+            let renderedLine;
+
+            if (this.isEditing && lineIdx === this.editCursorRow) {
+              const col = Math.min(lineText.length, Math.max(0, this.editCursorCol || 0));
+              const before = lineText.slice(0, col);
+              const cursorChar = col < lineText.length ? lineText[col] : ' ';
+              const after = col < lineText.length ? lineText.slice(col + 1) : '';
+              // Distinct cursor visual highlight: white on magenta/pink background
+              const highlightedCursor = `\x1b[45m\x1b[97m\x1b[1m${cursorChar}\x1b[0m`;
+              renderedLine = `${highlightSyntax(before)}${highlightedCursor}${highlightSyntax(after)}`;
+            } else {
+              renderedLine = highlightSyntax(lineText);
+            }
+            previewLines.push(` ${C.textDim}${lineNum}${C.reset}${renderedLine}`);
           } else {
             break;
           }
@@ -772,7 +788,12 @@ class TerminalSession {
 
     // ── Row 2: Status Bar (Matching screenshot footer) ─────────────
     let leftStatus = '';
-    if (this.activeTab === 'files') {
+    if (this.isEditing) {
+      const curName = this.currentFile ? this.currentFile.name : '-';
+      const ln = (this.editCursorRow || 0) + 1;
+      const col = (this.editCursorCol || 0) + 1;
+      leftStatus = `${C.amber}[INSERT]${C.reset} ${C.textMain}${curName}${C.reset}  ${C.roseBright}Ln ${ln}, Col ${col}${C.reset}`;
+    } else if (this.activeTab === 'files') {
       const idx = this.workspaceFiles.length > 0 ? this.selectedFileIndex + 1 : 0;
       const curName = this.currentFile ? this.currentFile.name : (this.workspaceFiles[0]?.name || '-');
       leftStatus = `${C.textMain}${idx}/${this.workspaceFiles.length}  ${curName}${C.reset}`;
@@ -793,6 +814,18 @@ class TerminalSession {
     const pad2 = ' '.repeat(Math.max(2, cols - totalPlain - gap));
 
     out += ` ${leftStatus}${pad1}${centerMsg}${pad2}${rightStatus}\x1b[K`;
+
+    // ── Cursor Positioning & Visibility ────────────────────────────
+    if (this.isEditing) {
+      const visibleLineIndex = (this.editCursorRow || 0) - (this.editorScrollOffset || 0);
+      const targetRow = Math.max(3, Math.min(rows - 3, 3 + visibleLineIndex));
+      const editorLeftCol = isThreePane ? (p1Width + p2Width + 11) : (p1Width + 10);
+      const targetCol = Math.max(editorLeftCol, Math.min(cols - 3, editorLeftCol + (this.editCursorCol || 0)));
+      // Move hardware terminal cursor precisely to editing row & col, and make it visible
+      out += `\x1b[${targetRow};${targetCol}H\x1b[?25h`;
+    } else {
+      out += `\x1b[?25l`;
+    }
 
     this.write(out);
   }
@@ -1005,69 +1038,148 @@ class TerminalSession {
 
     this.isEditing = true;
     this.statusMessage = `Editing '${this.currentFile.name}'`;
-    this.renderIDE();
 
-    const lines = this.currentFile.content ? this.currentFile.content.split('\n') : [''];
-    let currentLine = '';
+    let lines = this.currentFile.content ? this.currentFile.content.split('\n') : [''];
+    if (lines.length === 0) lines = [''];
+
+    this.editCursorRow = Math.min(lines.length - 1, Math.max(0, this.editCursorRow || 0));
+    this.editCursorCol = Math.min(lines[this.editCursorRow].length, Math.max(0, this.editCursorCol || 0));
+    this.editorScrollOffset = Math.max(0, this.editorScrollOffset || 0);
+
+    const getInnerRows = () => Math.max(6, (this.pty.rows || 24) - 5);
+
+    const ensureCursorVisible = () => {
+      const viewRows = Math.max(1, getInnerRows() - 1);
+      if (this.editCursorRow < this.editorScrollOffset) {
+        this.editorScrollOffset = this.editCursorRow;
+      } else if (this.editCursorRow >= this.editorScrollOffset + viewRows) {
+        this.editorScrollOffset = this.editCursorRow - viewRows + 1;
+      }
+    };
+
+    ensureCursorVisible();
+    this.renderIDE();
 
     await new Promise((resolve) => {
       const onData = async (chunk) => {
         const str = chunk.toString();
 
-        // Check for Ctrl+O (\x0f) to save
-        if (str === '\x0f') {
+        // 1. Save: Ctrl+O (\x0f) or Ctrl+S (\x13)
+        if (str === '\x0f' || str === '\x13') {
           this.stream.removeListener('data', onData);
-          if (currentLine) {
-            lines.push(currentLine);
-          }
           this.currentFile.content = lines.join('\n');
           await this.saveCurrentFile();
           this.isEditing = false;
-          resolve();
-          return;
-        }
-
-        // Check for Escape to cancel
-        if (str === '\x1b') {
-          this.stream.removeListener('data', onData);
-          this.statusMessage = 'Cancelled editing';
-          this.isEditing = false;
+          this.write('\x1b[?25l');
           this.renderIDE();
           resolve();
           return;
         }
 
-        // Process typed characters
-        for (let i = 0; i < str.length; i++) {
-          const char = str[i];
-          if (char === '\x0f') {
-            this.stream.removeListener('data', onData);
-            if (currentLine) {
-              lines.push(currentLine);
+        // 2. Cancel: Escape (\x1b) or Ctrl+C (\x03)
+        if (str === '\x1b' || str === '\x03') {
+          this.stream.removeListener('data', onData);
+          this.statusMessage = `Exited edit mode ('${this.currentFile.name}')`;
+          this.isEditing = false;
+          this.write('\x1b[?25l');
+          this.renderIDE();
+          resolve();
+          return;
+        }
+
+        // 3. Arrow Keys and Special Cursor Navigation
+        if (str === '\x1b[A' || str === '\x1bOA') { // Up Arrow
+          if (this.editCursorRow > 0) {
+            this.editCursorRow--;
+            this.editCursorCol = Math.min(this.editCursorCol, lines[this.editCursorRow].length);
+          }
+        } else if (str === '\x1b[B' || str === '\x1bOB') { // Down Arrow
+          if (this.editCursorRow < lines.length - 1) {
+            this.editCursorRow++;
+            this.editCursorCol = Math.min(this.editCursorCol, lines[this.editCursorRow].length);
+          }
+        } else if (str === '\x1b[C' || str === '\x1bOC') { // Right Arrow
+          if (this.editCursorCol < lines[this.editCursorRow].length) {
+            this.editCursorCol++;
+          } else if (this.editCursorRow < lines.length - 1) {
+            this.editCursorRow++;
+            this.editCursorCol = 0;
+          }
+        } else if (str === '\x1b[D' || str === '\x1bOD') { // Left Arrow
+          if (this.editCursorCol > 0) {
+            this.editCursorCol--;
+          } else if (this.editCursorRow > 0) {
+            this.editCursorRow--;
+            this.editCursorCol = lines[this.editCursorRow].length;
+          }
+        } else if (str === '\x1b[H' || str === '\x1b[1~' || str === '\x1bOH') { // Home
+          this.editCursorCol = 0;
+        } else if (str === '\x1b[F' || str === '\x1b[4~' || str === '\x1bOF') { // End
+          this.editCursorCol = lines[this.editCursorRow].length;
+        } else if (str === '\x1b[5~') { // Page Up
+          const step = Math.max(1, getInnerRows() - 2);
+          this.editCursorRow = Math.max(0, this.editCursorRow - step);
+          this.editCursorCol = Math.min(this.editCursorCol, lines[this.editCursorRow].length);
+        } else if (str === '\x1b[6~') { // Page Down
+          const step = Math.max(1, getInnerRows() - 2);
+          this.editCursorRow = Math.min(lines.length - 1, this.editCursorRow + step);
+          this.editCursorCol = Math.min(this.editCursorCol, lines[this.editCursorRow].length);
+        } else if (str === '\x1b[3~') { // Delete key
+          const curLine = lines[this.editCursorRow];
+          if (this.editCursorCol < curLine.length) {
+            lines[this.editCursorRow] = curLine.slice(0, this.editCursorCol) + curLine.slice(this.editCursorCol + 1);
+          } else if (this.editCursorRow < lines.length - 1) {
+            lines[this.editCursorRow] = curLine + lines[this.editCursorRow + 1];
+            lines.splice(this.editCursorRow + 1, 1);
+          }
+        } else {
+          // 4. Character typing / pasted multiline text
+          for (let i = 0; i < str.length; i++) {
+            const char = str[i];
+
+            if (char === '\x0f' || char === '\x13') { // Save
+              this.stream.removeListener('data', onData);
+              this.currentFile.content = lines.join('\n');
+              await this.saveCurrentFile();
+              this.isEditing = false;
+              this.write('\x1b[?25l');
+              this.renderIDE();
+              resolve();
+              return;
+            } else if (char === '\r' || char === '\n') { // Enter
+              const curLine = lines[this.editCursorRow];
+              const leftPart = curLine.slice(0, this.editCursorCol);
+              const rightPart = curLine.slice(this.editCursorCol);
+              lines[this.editCursorRow] = leftPart;
+              lines.splice(this.editCursorRow + 1, 0, rightPart);
+              this.editCursorRow++;
+              this.editCursorCol = 0;
+            } else if (char === '\u0008' || char === '\x7f') { // Backspace
+              const curLine = lines[this.editCursorRow];
+              if (this.editCursorCol > 0) {
+                lines[this.editCursorRow] = curLine.slice(0, this.editCursorCol - 1) + curLine.slice(this.editCursorCol);
+                this.editCursorCol--;
+              } else if (this.editCursorRow > 0) {
+                const prevLine = lines[this.editCursorRow - 1];
+                this.editCursorCol = prevLine.length;
+                lines[this.editCursorRow - 1] = prevLine + curLine;
+                lines.splice(this.editCursorRow, 1);
+                this.editCursorRow--;
+              }
+            } else if (char === '\t') { // Tab -> 2 spaces
+              const curLine = lines[this.editCursorRow];
+              lines[this.editCursorRow] = curLine.slice(0, this.editCursorCol) + '  ' + curLine.slice(this.editCursorCol);
+              this.editCursorCol += 2;
+            } else if (char >= ' ' || char === '\t') { // Normal printable char
+              const curLine = lines[this.editCursorRow];
+              lines[this.editCursorRow] = curLine.slice(0, this.editCursorCol) + char + curLine.slice(this.editCursorCol);
+              this.editCursorCol++;
             }
-            this.currentFile.content = lines.join('\n');
-            await this.saveCurrentFile();
-            this.isEditing = false;
-            resolve();
-            return;
-          } else if (char === '\r' || char === '\n') {
-            lines.push(currentLine);
-            currentLine = '';
-          } else if (char === '\u0008' || char === '\x7f') { // Backspace
-            if (currentLine.length > 0) {
-              currentLine = currentLine.slice(0, -1);
-            } else if (lines.length > 0) {
-              currentLine = lines.pop() || '';
-            }
-          } else if (char >= ' ' && char <= '~') {
-            currentLine += char;
           }
         }
 
-        // Live preview in IDE right pane
-        const previewLines = [...lines];
-        if (currentLine) previewLines.push(currentLine);
-        this.currentFile.content = previewLines.join('\n');
+        this.currentFile.content = lines.join('\n');
+        ensureCursorVisible();
         this.renderIDE();
       };
 
